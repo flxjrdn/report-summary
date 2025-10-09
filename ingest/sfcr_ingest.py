@@ -144,6 +144,13 @@ class IngestionResult:
     issues: List[str]
 
 
+@dataclass
+class TocItem:
+    page: int
+    title: str
+    left_marker: str  # e.g., "A.", "A.1", "Teil A", "" (empty if none)
+
+
 # -----------------------------
 # Core classes
 # -----------------------------
@@ -391,6 +398,127 @@ class ToCDetector:
                     return None
 
         return (letter_val, title, page_num)
+
+    def _extract_toc_item_from_line(self, line_spans: List[Dict[str, Any]]) -> Optional[TocItem]:
+        """
+        Generic ToC line parser:
+        - Accepts left marker in many forms ("A.", "A", "Teil A", "A.1", or none)
+        - Extracts trailing page from the rightmost token or merged leaders
+        - Returns TocItem(page, title, left_marker)
+        """
+        if not line_spans:
+            return None
+
+        # Try to find a rightmost page number
+        page_idx = None
+        for i in range(len(line_spans) - 1, -1, -1):
+            t = line_spans[i]["text"]
+            if NUM_RE.match(t or ""):
+                page_idx = i
+                break
+
+        merged_right = None
+        if page_idx is None:
+            # Try merged "Title……39"
+            tlast = line_spans[-1]["text"]
+            m = RIGHT_TOKEN_RE.match(tlast)
+            if not m:
+                return None
+            merged_right = m
+            page_idx = len(line_spans) - 1
+            title_right = m.group("title").strip()
+            try:
+                page_num = int(m.group("page"))
+            except ValueError:
+                return None
+        else:
+            # Page in its own token
+            try:
+                page_num = int(line_spans[page_idx]["text"])
+            except ValueError:
+                m = RIGHT_TOKEN_RE.match(line_spans[page_idx]["text"])
+                if not m:
+                    return None
+                title_right = m.group("title").strip()
+                try:
+                    page_num = int(m.group("page"))
+                except ValueError:
+                    return None
+                merged_right = m
+
+        # Left marker (if any)
+        left_marker = ""
+        letter_idx = None
+        for i, sp in enumerate(line_spans[:page_idx]):
+            t = sp["text"]
+            if LEFT_SUBSECTION_RE.match(t):
+                left_marker = t  # e.g., "E.1"
+                letter_idx = i
+                break
+            m = LEFT_TOPLEVEL_RE.match(t)
+            if m:
+                left_marker = m.group(1).upper() + "."
+                letter_idx = i
+                break
+            m2 = LEFT_TEIL_RE.match(t)
+            if m2:
+                left_marker = f"Teil {m2.group(1).upper()}"
+                letter_idx = i
+                break
+            m3 = LEFT_LETTER_ONLY_RE.match(t)
+            if m3:
+                # If next token is ".", treat "A" + "." as "A."
+                if i + 1 < page_idx and line_spans[i + 1]["text"] == ".":
+                    left_marker = m3.group(1).upper() + "."
+                    letter_idx = i + 1
+                else:
+                    left_marker = m3.group(1).upper()
+                    letter_idx = i
+                break
+
+        # Build title from tokens between left marker and page
+        start_j = (letter_idx + 1) if letter_idx is not None else 0
+        title_tokens = []
+        for j in range(start_j, page_idx):
+            txt = line_spans[j]["text"]
+            if txt and all(ch in LEADER_CHARS + " " for ch in txt):
+                continue
+            if txt == ".":
+                continue
+            title_tokens.append(txt)
+
+        title = " ".join(title_tokens).strip()
+        if not title and merged_right:
+            title = title_right  # prefix before trailing page inside merged right token
+        title = re.sub(r"\s+", " ", title).strip()
+
+        if not title:
+            return None
+
+        return TocItem(page=page_num, title=title, left_marker=left_marker)
+
+    def detect_items(self, loader) -> List[TocItem]:
+        """Return generic ToC items from first N pages."""
+        items: List[TocItem] = []
+        n_pages = loader.page_count()
+        limit = min(n_pages, self.max_pages_scan)
+        for pi in range(limit):
+            spans = list(self._iter_spans(loader, pi))
+            lines = self._group_by_baseline(spans)
+            for line in lines:
+                item = self._extract_toc_item_from_line(line)
+                if item:
+                    items.append(item)
+        # De-duplicate (some PDFs repeat ToC across a spread)
+        seen = set()
+        uniq: List[TocItem] = []
+        for it in items:
+            key = (it.page, it.title.lower(), it.left_marker.lower())
+            if key in seen:
+                continue
+            seen.add(key)
+            uniq.append(it)
+        return uniq
 
     def detect(self, loader) -> List[HeadingHit]:
         hits: List[HeadingHit] = []
@@ -661,6 +789,55 @@ class SFCRIngestor:
         # 3) Subsections
         subsections = self.subs.detect(self.loader, sections)
 
+        # Find E's start page (or the latest section’s end if E is missing)
+        last_ae_start = 0
+        last_ae_section = None
+        for sp in sections:
+            if sp.section in ("A", "B", "C", "D", "E"):
+                last_ae_start = max(last_ae_start, sp.start_page)
+                last_ae_section = sp
+
+        # Pull generic ToC items
+        toc_items = self.toc.detect_items(self.loader)
+
+        def is_e_subsection(left_marker: str) -> bool:
+            # things like "E.1", "E.2.3", or "Abschnitt E" (treat as under E)
+            if not left_marker:
+                return False
+            if re.match(r"^E\.\d", left_marker, re.I):
+                return True
+            if re.match(r"^Abschnitt\s*E\b", left_marker, re.I):
+                return True
+            if re.match(r"^Teil\s*E\b", left_marker, re.I):
+                return True
+            # Pure "E." is the section itself (already handled), not a subsection
+            return False
+
+        # Choose the earliest ToC item whose page is strictly after E's start,
+        # and which is NOT an E-subsection. This is our "post" start candidate.
+        post_candidate = None
+        for it in sorted(toc_items, key=lambda x: x.page):
+            if it.page <= max(1, last_ae_start):
+                continue
+            if is_e_subsection(it.left_marker):
+                continue
+            post_candidate = it
+            break
+
+        if post_candidate:
+            # Append synthetic trailing section Z (generic name for display)
+            detectors = {"post_toc": True, "post_regex": False, "post_bookmark": False,
+                         "bookmark": False, "toc": False, "regex": False}
+            sections.append(SectionSpan(
+                section="Z",
+                start_page=post_candidate.page,
+                end_page=self.loader.page_count(),
+                confidence=0.8,  # ToC-derived; you can tune
+                detectors=detectors
+            ))
+            if last_ae_section:
+                last_ae_section.end_page = post_candidate.page - 1
+
         # 4) Coverage metric
         if sections:
             covered = sum(sp.end_page - sp.start_page + 1 for sp in sections)
@@ -690,7 +867,7 @@ if __name__ == "__main__":
     import os
     import definitions
 
-    pdf_path = pathlib.Path(os.path.join(definitions.PATH_SFCR_REPORTS_PKV, "apkv_2024.pdf"))
+    pdf_path = pathlib.Path(os.path.join(definitions.PATH_SFCR_REPORTS_PKV, "sikv_2024.pdf"))
 
     pdf_path = pathlib.Path(pdf_path)
     if not pdf_path.exists():
