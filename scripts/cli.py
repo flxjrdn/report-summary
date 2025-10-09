@@ -1,22 +1,34 @@
 from __future__ import annotations
-import json, hashlib, sys
+
+import hashlib
+import json
 from pathlib import Path
+
 import typer
 from rich import print
+
+from ingest.schema import IngestionResult  # pydantic v2 schema
 from ingest.sfcr_ingest import SFCRIngestor  # your module
-from ingest.schema import IngestionResult    # pydantic v2 schema
 
 app = typer.Typer(add_completion=False, help="SFCR demo pipeline (lean CLI)")
+
 
 def _sha256(path: Path) -> str:
     with path.open("rb") as f:
         return hashlib.sha256(f.read()).hexdigest()
 
+
 @app.command()
 def ingest(
-    pdf: Path = typer.Argument(..., exists=True, readable=True, help="PDF path or directory"),
-    outdir: Path = typer.Option(Path("artifacts/ingest"), help="Where to write .ingest.json"),
-    doc_id: str = typer.Option(None, help="Override doc_id (defaults to filename stem)"),
+    pdf: Path = typer.Argument(
+        ..., exists=True, readable=True, help="PDF path or directory"
+    ),
+    outdir: Path = typer.Option(
+        Path("artifacts/ingest"), help="Where to write .ingest.json"
+    ),
+    doc_id: str = typer.Option(
+        None, help="Override doc_id (defaults to filename stem)"
+    ),
 ):
     """
     Run ingestion on a PDF or all PDFs in a directory.
@@ -25,7 +37,8 @@ def ingest(
     outdir.mkdir(parents=True, exist_ok=True)
     files = [pdf] if pdf.is_file() else sorted(p for p in pdf.glob("**/*.pdf"))
     if not files:
-        typer.secho("No PDFs found.", fg="red"); raise typer.Exit(1)
+        typer.secho("No PDFs found.", fg="red")
+        raise typer.Exit(1)
 
     for p in files:
         did = doc_id or p.stem
@@ -44,8 +57,17 @@ def ingest(
         # validate contract
         ir = IngestionResult(**payload)
         out_path = outdir / f"{did}.ingest.json"
-        out_path.write_text(json.dumps(ir.model_dump(exclude_none=True, sort_keys=True, ensure_ascii=False, indent=2), ensure_ascii=False), encoding="utf-8")
+        out_path.write_text(
+            json.dumps(
+                ir.model_dump(
+                    exclude_none=True, sort_keys=True, ensure_ascii=False, indent=2
+                ),
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
         print(f"[green]✓[/green] {p.name} → {out_path}")
+
 
 @app.command()
 def validate(json_path: Path):
@@ -55,6 +77,7 @@ def validate(json_path: Path):
     data = json.loads(json_path.read_text(encoding="utf-8"))
     IngestionResult(**data)
     print("[green]OK[/green]")
+
 
 if __name__ == "__main__":
     app()
