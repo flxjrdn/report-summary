@@ -17,8 +17,6 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import fitz  # PyMuPDF
 
-from definitions import PATH_OUTPUT
-
 # -----------------------------
 # Utilities & configuration
 # -----------------------------
@@ -956,11 +954,9 @@ class SFCRIngestor:
 
 if __name__ == "__main__":
     import hashlib
-    import os
-    import pathlib
 
-    import definitions
-    from ingest.validate_and_dump import dump_ingestion_result
+    from sfcr.config import config
+    from sfcr.ingest.validate_and_dump import dump_ingestion_result
 
     file_names = [
         "sikv_2024.pdf",
@@ -969,11 +965,7 @@ if __name__ == "__main__":
     ]
 
     for file_name in file_names:
-        pdf_path = pathlib.Path(
-            os.path.join(definitions.PATH_SFCR_REPORTS_PKV, file_name)
-        )
-
-        pdf_path = pathlib.Path(pdf_path)
+        pdf_path = config.data_dir / "sfcr" / "pkv" / file_name
         if not pdf_path.exists():
             raise SystemExit(f"File not found: {pdf_path}")
 
@@ -998,6 +990,6 @@ if __name__ == "__main__":
             "issues": result.issues,
         }
 
-        out_path = pathlib.Path(os.path.join(PATH_OUTPUT, f"{doc_id}.json"))
+        out_path = config.output_dir / f"{doc_id}.json"
         dump_ingestion_result(payload, out_path)
         print(f"Wrote: {out_path}")

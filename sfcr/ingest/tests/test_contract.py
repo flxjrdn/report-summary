@@ -2,7 +2,7 @@ import glob
 import json
 import pathlib
 
-from ingest.schema import IngestionResult
+from sfcr.ingest.schema import IngestionResult
 
 
 def test_examples_validate():

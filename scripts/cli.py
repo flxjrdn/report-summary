@@ -7,8 +7,8 @@ from pathlib import Path
 import typer
 from rich import print
 
-from ingest.schema import IngestionResult  # pydantic v2 schema
-from ingest.sfcr_ingest import SFCRIngestor  # your module
+from sfcr.ingest.schema import IngestionResult
+from sfcr.ingest.sfcr_ingest import SFCRIngestor
 
 app = typer.Typer(add_completion=False, help="SFCR demo pipeline (lean CLI)")
 
