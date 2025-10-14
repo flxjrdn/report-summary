@@ -13,11 +13,14 @@ platformdirs==4.5.0
 pluggy==1.6.0
 pre_commit==4.3.0
 pydantic==2.12.0
+pydantic-settings==2.11.0
 pydantic_core==2.41.1
 Pygments==2.19.2
 PyMuPDF==1.26.4
 pytest==8.4.2
+python-dotenv==1.1.1
 PyYAML==6.0.3
+-e git+ssh://git@github.com/flxjrdn/report-summary.git@60d5d47ffcb6af3889e8d3480ecfacbbad6974b1#egg=report_summary
 rich==14.2.0
 shellingham==1.5.4
 typer==0.19.2
