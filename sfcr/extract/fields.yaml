@@ -1,0 +1,56 @@
+- id: scr_total
+  section_hint: E
+  unit: EUR
+  typical_scale: 1e3
+  currency: EUR
+  keywords: ["SCR", "Solvenzkapitalanforderung", "S.23.01", "Solvency Capital Requirement"]
+  notes: "Usually in S.23.01 or section E narrative"
+
+- id: mcr_total
+  section_hint: E
+  unit: EUR
+  typical_scale: 1e3
+  currency: EUR
+  keywords: ["MCR", "Mindestkapitalanforderung", "Minimum Capital Requirement"]
+
+- id: eof_total
+  section_hint: E
+  unit: EUR
+  typical_scale: 1e3
+  currency: EUR
+  keywords: ["Eigenmittel", "Eligible own funds", "EOF", "S.23.01"]
+
+- id: eof_t1
+  section_hint: E
+  unit: EUR
+  typical_scale: 1e3
+  currency: EUR
+  keywords: ["Tier 1", "T1", "Eigenmittel der Qualität 1", "Unrestricted/Restricted"]
+
+- id: eof_t2
+  section_hint: E
+  unit: EUR
+  typical_scale: 1e3
+  currency: EUR
+  keywords: ["Tier 2", "T2", "Eigenmittel der Qualität 2"]
+
+- id: sii_ratio_pct
+  section_hint: E
+  unit: "%"
+  typical_scale: 1
+  currency: null
+  keywords: ["Bedeckungsquote", "Solvenzquote", "Solvency ratio", "SCR-Bedeckung"]
+
+- id: tech_provisions_total
+  section_hint: D
+  unit: EUR
+  typical_scale: 1e3
+  currency: EUR
+  keywords: ["Versicherungstechnische Rückstellungen", "Technical provisions", "S.17.01"]
+
+- id: risk_margin
+  section_hint: D
+  unit: EUR
+  typical_scale: 1e3
+  currency: EUR
+  keywords: ["Risikomarge", "Risk margin"]
