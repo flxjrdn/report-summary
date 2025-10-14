@@ -2,16 +2,13 @@
 # SFCR Pipeline - Developer Makefile
 # =============================
 
-# Default directories
-DATA_DIR := data/samples
-OUT_DIR  := artifacts/ingest
-PYTHON   := python3
+PYTHON := python3
+
+export SFCR_DATA
+export SFCR_OUTPUT
 
 # Default target when you run "make"
 .DEFAULT_GOAL := help
-
-# These targets do not refer to files - always run them
-.PHONY: help install test ingest validate schema clean
 
 # ---  Help  --------------------------------------------------------
 help:
@@ -37,12 +34,10 @@ test:
 
 # ---  Pipeline  ----------------------------------------------------
 ingest:
-	$(PYTHON) scripts/cli.py ingest $(DATA_DIR) --outdir $(OUT_DIR)
+	$(PYTHON) scripts/cli.py ingest
 
 validate:
-	for f in $(OUT_DIR)/*.ingest.json; do \
-	$(PYTHON) scripts/cli.py validate $$f; \
-	done
+	$(PYTHON) scripts/cli.py validate-dir
 
 schema:
 	$(PYTHON) scripts/export_schema.py
@@ -51,4 +46,7 @@ schema:
 
 # ---  Maintenance  -------------------------------------------------
 clean:
-	rm -rf __pycache__ .pytest_cache $(OUT_DIR)/*.json artifacts/*.json
+	rm -rf __pycache__ .pytest_cache artifacts/ingest/*.json artifacts/*.json
+
+# These targets do not refer to files - always run them
+.PHONY: help install test ingest validate schema clean

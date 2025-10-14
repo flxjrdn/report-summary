@@ -2,7 +2,7 @@
 name = "report-summary"
 version = "0.1.0"
 requires-python = ">=3.10"
-dependencies = ["pymupdf", "pydantic>=2", "typer", "rich"]
+dependencies = ["pymupdf", "pydantic>=2", "typer", "rich", "pydantic-settings"]
 
 [build-system]
 requires = ["setuptools>=64", "wheel"]
