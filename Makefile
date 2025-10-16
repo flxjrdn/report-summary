@@ -4,6 +4,12 @@
 
 PYTHON := python3
 
+# load .env if present
+ifneq (,$(wildcard .env))
+	include .env
+	export $(shell sed 's/=.*//' .env)
+endif
+
 export SFCR_DATA
 export SFCR_OUTPUT
 
@@ -18,6 +24,8 @@ help:
 	@echo "  install     Install dependencies"
 	@echo "  test        Run pytest unit tests"
 	@echo "  ingest      Run ingestion on sample PDFs"
+	@echo "  extract     Extract values from ingested pdf"
+	@echo "  eval     	 Evaluate extraction results against gold csv file"
 	@echo "  validate    Validate produced *.ingest.json files"
 	@echo "  schema      Regenerate ingestion JSON Schema"
 	@echo "  clean       Remove build artifacts"
@@ -44,9 +52,18 @@ schema:
 	git diff --exit-code schema/ingestion.schema.json || \
 	(echo "Schema changed — bump schema_version and update examples." && exit 1)
 
+extract:
+	$(PYTHON) scripts/cli.py extract $(PDF)
+
+eval:
+	$(PYTHON) scripts/cli.py eval
+
+gold:
+	$(PYTHON) scripts/cli.py gold
+
 # ---  Maintenance  -------------------------------------------------
 clean:
 	rm -rf __pycache__ .pytest_cache artifacts/ingest/*.json artifacts/*.json
 
 # These targets do not refer to files - always run them
-.PHONY: help install test ingest validate schema clean
+.PHONY: help install test ingest validate schema extract eval gold clean
