@@ -59,6 +59,9 @@ schema:
 extract:
 	$(PYTHON) scripts/cli.py extract $(PDF)
 
+extract-dir:
+	$(PYTHON) scripts/cli.py extract-dir
+
 extract-ollama:
 	$(PYTHON) scripts/cli.py extract --provider ollama --model mistral
 
@@ -85,4 +88,4 @@ clean:
 	rm -rf __pycache__ .pytest_cache artifacts/ingest/*.json artifacts/*.json
 
 # These targets do not refer to files - always run them
-.PHONY: help install test ingest validate schema extract extract-ollama extract-dir-ollama eval gold ui db-init db-load clean
+.PHONY: help install test ingest validate schema extract extract-dir extract-ollama extract-dir-ollama eval gold ui db-init db-load clean

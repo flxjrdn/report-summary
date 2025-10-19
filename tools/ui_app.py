@@ -116,7 +116,11 @@ def main():
                 if pdf_path and page:
                     img = render_pdf_page(Path(pdf_path), int(page))
                     if img:
-                        st.image(img, caption=f"{Path(pdf_path).name} — page {page}", width='stretch')
+                        st.image(
+                            img,
+                            caption=f"{Path(pdf_path).name} — page {page}",
+                            width="stretch",
+                        )
                     else:
                         st.info(
                             "Page preview unavailable (no PDF path or PyMuPDF missing)."

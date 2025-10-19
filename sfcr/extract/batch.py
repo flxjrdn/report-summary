@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Iterable, Optional, Tuple
 
+from rich import print
 from rich.progress import (
     BarColumn,
     MofNCompleteColumn,

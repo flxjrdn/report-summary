@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Dict, Iterable, Optional, Tuple
+from typing import Any, Dict, Iterable, Optional, Tuple
 
 from .schema import ExtractionLLM, VerifiedExtraction
 
@@ -85,10 +85,35 @@ def infer_scale(context_tokens: Iterable[Tuple[str, str]]) -> Tuple[float, str]:
     return (None, "unknown")  # type: ignore
 
 
+def _coerce_scale(x: Any) -> Optional[float]:
+    """
+    Accepts float/int/str like '1e3', '1000', or textual shorthands; returns float or None.
+    """
+    if x is None:
+        return None
+    if isinstance(x, (int, float)):
+        return float(x)
+    if isinstance(x, str):
+        s = x.strip().lower()
+        # common shorthands if they sneak in from prompts/yaml
+        if s in {"teur", "tsd", "tausend", "1k"}:
+            return 1e3
+        if s in {"mio", "million", "1m"}:
+            return 1e6
+        if s in {"mrd", "milliarde", "1b"}:
+            return 1e9
+        try:
+            return float(s)  # handles "1000", "1e3", "1e6"
+        except ValueError:
+            return None
+    return None
+
+
 def apply_scale(value: float, scale: Optional[float]) -> float:
-    if scale is None:
-        scale = 1.0
-    return value * scale
+    sc = _coerce_scale(scale)
+    if sc is None:
+        sc = 1.0
+    return value * sc
 
 
 # ---------------- Verification ----------------
