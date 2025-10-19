@@ -30,6 +30,13 @@ def render_pdf_page(pdf_path: Path, page: int, zoom: float = 1.5) -> Optional[by
     except Exception:
         return None
 
+def safe_rerun():
+    if hasattr(st, "rerun"):
+        st.rerun()
+    elif hasattr(st, "experimental_rerun"):
+        st.experimental_rerun()
+    else:
+        raise RuntimeError("This version of Streamlit has no rerun method.")
 
 def main():
     st.set_page_config(page_title="SFCR Extractor Viewer", layout="wide")
@@ -52,7 +59,7 @@ def main():
 
     with colC:
         if st.button("↻ Refresh"):
-            st.experimental_rerun()
+            safe_rerun()
 
     # Documents sidebar
     docs = list_documents(db_path)
