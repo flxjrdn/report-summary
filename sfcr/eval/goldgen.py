@@ -124,8 +124,6 @@ def generate_gold(
     """
     cfg = get_settings()
     extractions_root = cfg.output_dir  # where *.extractions.jsonl live
-    if extractions_root is None:
-        raise ValueError("No extractions directory specified")
     gold_path = out_path or (cfg.project_root / "data" / "gold" / "gold.csv")
 
     items = collect_extractions(extractions_root)
