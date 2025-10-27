@@ -64,7 +64,12 @@ class SubsectionSpan(BaseModel):
     section: Literal["A", "B", "C", "D", "E"]
     code: str = Field(..., pattern=r"^[A-E]\.\d{1,2}(\.\d{1,2})?$")
     title: str = Field(..., min_length=1, max_length=300)
-    page: int = Field(..., ge=1)
+    start_page: int = Field(
+        ..., ge=1, description="1-based inclusive page index where subsection starts"
+    )
+    end_page: int = Field(
+        ..., ge=1, description="1-based inclusive page index where subsection ends"
+    )
     confidence: float = Field(0.0, ge=0.0, le=1.0)
 
     @field_validator("title")

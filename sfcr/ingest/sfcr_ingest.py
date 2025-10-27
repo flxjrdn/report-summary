@@ -30,7 +30,7 @@ SECTION_PATTERNS: Dict[str, re.Pattern] = {
         r"^A\.\s*(Geschäftsmodell(?: und Leistung)?|Geschäftstätigkeit(?: und Geschäftsergebnis)?|Geschäftsmodell und Leistung)",
         re.I,
     ),
-    "B": re.compile(r"^B\.\s*(Governance[- ]?System|System der Governance)", re.I),
+    "B": re.compile(r"^B\.\s*(Governance[- ]?System|(System der )?Governance)", re.I),
     "C": re.compile(r"^C\.\s*(Risikoprofil)", re.I),
     "D": re.compile(
         r"^D\.\s*(Bewertung f[üu]r Solven[z]?-?zwecke|Bewertung für Solvabilitätszwecke)",
@@ -144,7 +144,8 @@ class SubsectionSpan:
     section: str  # 'A'
     code: str  # 'A.1' or 'B.2.1'
     title: str
-    page: int
+    start_page: int
+    end_page: int
     confidence: float
 
 
@@ -569,7 +570,7 @@ class ToCDetector:
                     HeadingHit(
                         letter=letter,
                         page=page_num,
-                        score=0.55,  # slightly higher than v1 ToC because we worked harder
+                        score=0.55,
                         text=title,
                         bbox=(0, 0, 0, 0),
                         source="toc",
@@ -761,6 +762,8 @@ class SubsectionDetector:
     ) -> List[SubsectionSpan]:
         subs: List[SubsectionSpan] = []
         for sp in section_spans:
+            # Collect subsection hits as tuples: (code, title, page, confidence)
+            hits: List[Tuple[str, str, int, float]] = []
             for p in range(sp.start_page - 1, sp.end_page):
                 page = loader.get_page(p)
                 page_dict = page.get_text("dict")
@@ -776,24 +779,49 @@ class SubsectionDetector:
                         if not m:
                             continue
                         letter, n1, n2, title = m.groups()
-                        # Keep only subsections whose letter matches parent section
                         letter = letter.upper()
                         if letter != sp.section:
                             continue
                         code = f"{letter}.{n1}" + (f".{n2}" if n2 else "")
-                        # rudimentary confidence (can add font-size cues later)
                         conf = 0.6 + roughly_top_left(
                             line["spans"][0]["bbox"], page_rect
                         )
-                        subs.append(
-                            SubsectionSpan(
-                                section=letter,
-                                code=code,
-                                title=title,
-                                page=p + 1,
-                                confidence=min(0.95, conf),
-                            )
-                        )
+                        hits.append((code, title, p + 1, min(0.95, conf)))
+            # Deduplicate by (code, page)
+            seen = set()
+            deduped_hits: List[Tuple[str, str, int, float]] = []
+            for h in hits:
+                key = (h[0], h[2])
+                if key in seen:
+                    continue
+                seen.add(key)
+                deduped_hits.append(h)
+            # Sort by page, then code for stability
+            deduped_hits.sort(key=lambda x: (x[2], x[0]))
+            # Materialize continuous spans
+            n = len(deduped_hits)
+            for i, (code, title, page, confidence) in enumerate(deduped_hits):
+                # Start page for this subsection
+                start_page = max(sp.start_page, page)
+                # End page: if not last, up to next subsection's page; else to section end
+                if i + 1 < n:
+                    next_page = deduped_hits[i + 1][2]
+                    end_page = min(sp.end_page, next_page)
+                else:
+                    end_page = sp.end_page
+                # Allow end_page equal to start_page
+                if start_page > end_page:
+                    continue
+                subs.append(
+                    SubsectionSpan(
+                        section=sp.section,
+                        code=code,
+                        title=title,
+                        start_page=start_page,
+                        end_page=end_page,
+                        confidence=confidence,
+                    )
+                )
         return subs
 
 
