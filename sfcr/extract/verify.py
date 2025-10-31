@@ -13,7 +13,7 @@ LEADER_CHARS = r"\.\u2026\u00B7\u2219\u22EF\u2024\u2027\uf020·•⋯∙"
 NUM_CORE = re.compile(
     r"""
     (?P<neg>\()?\s*
-    (?P<int>(?:\d{1,3}(?:\.\d{3})+|\d+))
+    (?P<int>(?:\d{1,3}(?:[ .\u202F\u2009]\d{3})+|\d+))
     (?P<dec>,\d+)?\s*
     (?P<pct>%){0,1}
     \)?                      # allow closing ')' for negative
@@ -39,7 +39,13 @@ class ParsedNumber:
 
 def _to_float_de(intpart: str, decpart: Optional[str]) -> float:
     # remove thousands separators and swap decimal comma
-    i = intpart.replace(".", "")
+    i = (
+        intpart.replace(".", "")
+        .replace(" ", "")
+        .replace(DE_NBSP, "")
+        .replace("\u202f", "")
+        .replace("\u2009", "")
+    )
     d = decpart.replace(",", ".") if decpart else ""
     s = f"{i}{d}"
     return float(s)
@@ -52,7 +58,10 @@ def parse_number_de(text: str) -> Optional[ParsedNumber]:
     """
     if not text:
         return None
-    text = text.replace(DE_NBSP, " ")
+    # Normalize spaces: replace NBSP, narrow no-break space, and thin space with normal space
+    text = text.replace(DE_NBSP, " ").replace("\u202f", " ").replace("\u2009", " ")
+    # Collapse multiple spaces to a single space
+    text = re.sub(r"\s+", " ", text)
     m = NUM_CORE.search(text)
     if not m:
         return None

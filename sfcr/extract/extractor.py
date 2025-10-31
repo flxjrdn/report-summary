@@ -18,7 +18,7 @@ from sfcr.ingest.schema import IngestionResult
 @dataclass
 class FieldDef:
     id: str
-    section_hint: str  # "A".."E" (usually), could be "D"/"E"
+    subsection_hint: str  # "A".."E" (usually), could be "D"/"E"
     unit: str  # "EUR" or "%"
     typical_scale: float | None
     currency: Optional[str]
@@ -29,10 +29,13 @@ def load_fields(path: Path) -> List[FieldDef]:
     rows = yaml.safe_load(path.read_text(encoding="utf-8"))
     out: List[FieldDef] = []
     for r in rows:
+        subsection_hint = r.get("subsection_hint")
+        if subsection_hint is None:
+            subsection_hint = r.get("section_hint", "E")
         out.append(
             FieldDef(
                 id=r["id"],
-                section_hint=r.get("section_hint", "E"),
+                subsection_hint=subsection_hint,
                 unit=r["unit"],
                 typical_scale=r.get("typical_scale"),
                 currency=r.get("currency"),
@@ -40,6 +43,25 @@ def load_fields(path: Path) -> List[FieldDef]:
             )
         )
     return out
+
+
+def _subsection_span_for(
+    sub_id: str, ingestion: IngestionResult
+) -> Optional[Tuple[int, int]]:
+    for s in ingestion.subsections:
+        if sub_id == getattr(s, "code", None):
+            return s.start_page, s.end_page
+    return None
+
+
+def _letter_from_sub_hint(sub_hint: str) -> str:
+    if sub_hint and len(sub_hint) > 0:
+        first_char = sub_hint[0].upper()
+        if first_char in ("A", "B", "C", "D", "E"):
+            return first_char
+    if sub_hint.startswith("S."):
+        return "E"
+    return "E"
 
 
 # ---------- simple text utilities ----------
@@ -206,7 +228,10 @@ def extract_for_document(
     results: List[VerifiedExtraction] = []
 
     for f in field_defs:
-        span = _section_span_for(f.section_hint, ingestion)
+        span = _subsection_span_for(f.subsection_hint, ingestion)
+        if not span:
+            letter = _letter_from_sub_hint(f.subsection_hint)
+            span = _section_span_for(letter, ingestion)
         if not span:
             # no section → not found
             results.append(
@@ -229,10 +254,13 @@ def extract_for_document(
             )
             continue
 
+        print(f.id)  # TODO delete
         start, end = span
+        print(f"start: {start}, end: {end}")  # TODO delete
         section_text, page_texts = extract_text_pages(pdf_path, start, end)
         # LLM pass
         llm_out = llm.extract(f, section_text, start, end)
+        print(llm_out.value)  # TODO delete
         # context scale tokens (caption > column > nearby)
         tokens = harvest_scale_tokens(page_texts)
         # deterministic verification

@@ -2,7 +2,7 @@
 name = "report-summary"
 version = "0.1.0"
 requires-python = ">=3.10"
-dependencies = ["pymupdf", "pydantic>=2", "typer", "rich", "pydantic-settings"]
+dependencies = ["pymupdf", "pydantic>=2", "typer", "rich", "pydantic-settings", "pytest>=7.4"]
 
 [build-system]
 requires = ["setuptools>=64", "wheel"]
@@ -10,3 +10,10 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["sfcr*"]
+
+[tool.pytest.ini_options]
+filterwarnings = [
+  "ignore:.*swigvarlink.*:DeprecationWarning",
+  "ignore:.*SwigPyObject.*:DeprecationWarning",
+  "ignore:.*SwigPyPacked.*:DeprecationWarning",
+]
