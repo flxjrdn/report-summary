@@ -24,11 +24,10 @@ class ExtractionLLM(BaseModel):
 
     field_id: str
     status: Status
-    value: Optional[float] = None  # value *before* applying 'scale'
+    value_unscaled: Optional[float] = None
+    value_scaled: Optional[float] = None
     unit: Optional[Literal["EUR", "%"]] = None
     scale: Optional[float] = Field(default=None, description="1|1e3|1e6|…")
-    currency: Optional[Literal["EUR"]] = "EUR"
-    period_end: Optional[str] = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")
     evidence: List[Evidence] = Field(default_factory=list)
     source_text: Optional[str] = Field(default=None, max_length=200)
     scale_source: Optional[
@@ -58,8 +57,6 @@ class VerifiedExtraction(BaseModel):
     verified: bool
     value_canonical: Optional[float] = None  # EUR or %; final canonical
     unit: Optional[Literal["EUR", "%"]] = None
-    currency: Optional[Literal["EUR"]] = None
-    period_end: Optional[str] = None
     confidence: float = Field(0.0, ge=0.0, le=1.0)
     evidence: List[Evidence] = Field(default_factory=list)
     source_text: Optional[str] = None

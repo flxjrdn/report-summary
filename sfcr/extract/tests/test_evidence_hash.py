@@ -23,7 +23,6 @@ def test_ensure_defaults_generates_snippet_hash_when_missing():
         "field_id": "scr_total",
         "value": 1312850,  # numeric → status should infer to "ok"
         "unit": "EUR",
-        "currency": "EUR",
         "evidence": [{"page": 68, "ref": "Solvabilitätskapitalanforderung"}],
         "source_text": "Solvabilitätskapitalanforderung 1 312 850 Tsd €",
         # snippet_hash intentionally missing

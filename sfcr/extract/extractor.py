@@ -9,6 +9,7 @@ import fitz  # PyMuPDF
 import yaml
 
 from sfcr.extract.schema import Evidence, ExtractionLLM, VerifiedExtraction
+from sfcr.extract.textnorm import normalize_hyphenation
 from sfcr.extract.verify import verify_extraction
 from sfcr.ingest.schema import IngestionResult
 
@@ -21,7 +22,6 @@ class FieldDef:
     subsection_hint: str  # "A".."E" (usually), could be "D"/"E"
     unit: str  # "EUR" or "%"
     typical_scale: float | None
-    currency: Optional[str]
     keywords: List[str]
 
 
@@ -38,7 +38,6 @@ def load_fields(path: Path) -> List[FieldDef]:
                 subsection_hint=subsection_hint,
                 unit=r["unit"],
                 typical_scale=r.get("typical_scale"),
-                currency=r.get("currency"),
                 keywords=r.get("keywords", []),
             )
         )
@@ -84,6 +83,7 @@ def extract_text_pages(pdf_path: Path, start: int, end: int) -> Tuple[str, List[
         doc.close()
 
 
+# TODO this needs some work
 def harvest_scale_tokens(page_texts: List[str]) -> List[Tuple[str, str]]:
     """
     Very small heuristic: look for scale phrases commonly near tables/captions.
@@ -183,11 +183,10 @@ class MockLLM(LLMClient):
         return ExtractionLLM(
             field_id=field.id,
             status="ok",
-            value=None,  # verifier will re-parse source_text deterministically
+            value_unscaled=None,
+            value_scaled=None,
             unit=unit,
             scale=guess_scale,
-            currency="EUR" if unit == "EUR" else None,
-            period_end=None,
             evidence=[Evidence(page=page_start, ref=None)],
             source_text=snip,
             scale_source=scale_source,
@@ -242,8 +241,6 @@ def extract_for_document(
                     verified=False,
                     value_canonical=None,
                     unit=f.unit if f.unit in ("EUR", "%") else None,
-                    currency="EUR" if f.unit == "EUR" else None,
-                    period_end=None,
                     confidence=0.0,
                     evidence=[],
                     source_text=None,
@@ -258,9 +255,13 @@ def extract_for_document(
         start, end = span
         print(f"start: {start}, end: {end}")  # TODO delete
         section_text, page_texts = extract_text_pages(pdf_path, start, end)
+        section_text, page_texts = (
+            normalize_hyphenation(section_text),
+            [normalize_hyphenation(page_text) for page_text in page_texts],
+        )
         # LLM pass
         llm_out = llm.extract(f, section_text, start, end)
-        print(llm_out.value)  # TODO delete
+        print(llm_out.value_scaled)  # TODO delete
         # context scale tokens (caption > column > nearby)
         tokens = harvest_scale_tokens(page_texts)
         # deterministic verification

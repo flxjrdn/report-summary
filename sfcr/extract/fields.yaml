@@ -2,7 +2,6 @@
   subsection_hint: E.2
   unit: EUR
   typical_scale: 1000
-  currency: EUR
   keywords: ["SCR", "Solvenzkapitalanforderung", "S.23.01", "Solvency Capital Requirement"]
   notes: "Usually in S.23.01 or section E narrative"
 
@@ -10,33 +9,28 @@
   subsection_hint: E.2
   unit: EUR
   typical_scale: 1000
-  currency: EUR
-  keywords: ["MCR", "Mindestkapitalanforderung", "Minimum Capital Requirement"]
+  keywords: ["Mindestkapitalanforderung", "MCR"]
 
 - id: eof_total
   subsection_hint: E.1
   unit: EUR
   typical_scale: 1000
-  currency: EUR
   keywords: ["Eigenmittel", "Eligible own funds", "EOF", "S.23.01"]
 
 - id: sii_ratio_pct
   subsection_hint: E.2
   unit: "%"
   typical_scale: 1
-  currency: null
   keywords: ["Bedeckungsquote", "Solvenzquote", "Solvabilitätsquote", "Solvency ratio", "SCR-Bedeckung"]
 
 - id: tech_provisions_total
   subsection_hint: D.2
   unit: EUR
   typical_scale: 1000
-  currency: EUR
   keywords: ["Versicherungstechnische Rückstellungen", "Technical provisions", "S.17.01"]
 
 - id: risk_margin
   subsection_hint: D.2
   unit: EUR
   typical_scale: 1000
-  currency: EUR
   keywords: ["Risikomarge", "Risk margin"]

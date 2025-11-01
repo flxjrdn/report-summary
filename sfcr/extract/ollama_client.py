@@ -88,27 +88,29 @@ def _mk_snippet_hash(*parts: Any, length: int = 16) -> str:
 
 
 # -----------------------------------------------------------------------------
-
+# TODO löschen?
 _JSON_SCHEMA_HINT = """
 Return ONLY a single JSON object with the following keys:
-- field_id (string)  -> must equal the requested field id
 - status (string)    -> one of: "ok", "not_found", "ambiguous"
 - value (number|null)          # numeric magnitude as printed (UNSCALED)
 - unit ("EUR"|"%"|null)        # "EUR" for amounts; "%" for percentages
-- scale (number|null)          # 1|1000|1e6|1e9 if TEUR/Mio/Mrd was indicated; else null/1
-- currency ("EUR"|null)        # "EUR" if unit is EUR; else null
-- period_end (YYYY-MM-DD|null)
-- evidence (array of {page:int, ref?:string}) with at least one item
-- source_text (string|null)    # short verbatim snippet (<=200 chars) around the number
-- scale_source ("row"|"column"|"caption"|"nearby"|"model_guess"|null)
-- notes (string|null)
 
 Rules:
 - Parse numbers in German locale (thousands '.' and decimal ',').
 - Keep "value" UNscaled; put the magnitude in "scale".
 - If you cannot find a unique value, set status "not_found" or "ambiguous" and leave numeric fields null.
 - Output ONLY JSON, with no extra text.
-- If a number is immediately followed by a parenthesized number (e.g. 123 456 (133 333)), treat the first number as the current period and the parenthesized number as the previous year's value. Example: "1.234.567 (1.111.111)" means value=1234567, prev_value=1111111.
+
+Example:
+For the following EXAMPLE_TEXT, you should return exactly the given EXAMPLE_OUTPUT:
+EXAMPLE_TEXT:
+Die Methodik des internen Modells wird im \nAbschnitt E.4 beschrieben. Die Solvabilitätskapitalanforderung der \nAllianz Privaten Krankenversicherungs-AG zum 31. Dezember 2024 \nbeträgt 1 312 850 (1 419 234) Tausend Euro, dieMindestkapitalanforderung 328 213 (354 808) Tausend Euro. \nDer Quotient aus den anrechnungsfähigen Eigenmitteln und der \nSolvabilitätskapitalanforderung ergibt die Solvabilitätsquote nach \nSolvency II. Eine ausreichende Kapitalreserve für Extremszenarien wird \nab einer Solvabilitätsquote von mindestens 100 Prozent (aufsichtsrechtliche Mindestbedeckung) erreicht.
+EXAMPLE_OUTPUT:
+{
+  "status": "ok",
+  "value_unscaled" : 328213,
+  "unit" : "EUR",
+}
 """
 
 
@@ -123,13 +125,13 @@ class OllamaLLM(LLMClient):
     temperature: float = 0.0
     host: str = "http://127.0.0.1:11434"
     input_token_limit: int = 1200
-    output_max_tokens: int = 200  # Ollama: num_predict
+    output_max_tokens: int = 400  # Ollama: num_predict
     timeout_s: float = 30.0
     max_retries: int = 1
     backoff_base_s: float = 1.2
     backoff_jitter_s: float = 0.4
     cache_dir: Path = field(default_factory=lambda: Path(".cache/ollama"))
-    enable_cache: bool = True
+    enable_cache: bool = False  # TODO activate cache
     debug_dir: Path = field(default_factory=lambda: Path(".cache/ollama_debug"))
     debug_raw: bool = True
 
@@ -142,8 +144,8 @@ class OllamaLLM(LLMClient):
         bounded = _window_text(field, section_text, self.input_token_limit)
         prompt = self._build_prompt(field, bounded, page_start, page_end)
 
-        cache_key = self._make_cache_key(field, prompt)
         if self.enable_cache:
+            cache_key = self._make_cache_key(field, prompt)
             cached = self._read_cache(cache_key)
             if cached is not None:
                 try:
@@ -152,8 +154,6 @@ class OllamaLLM(LLMClient):
                         out.evidence = [Evidence(page=page_start, ref=None)]
                     if out.field_id != field.id:
                         out.field_id = field.id
-                    if out.unit == "EUR" and out.currency is None:
-                        out.currency = "EUR"
                     return out
                 except Exception:
                     pass
@@ -191,8 +191,6 @@ class OllamaLLM(LLMClient):
                     out.evidence = [Evidence(page=page_start, ref=None)]
                 if out.field_id != field.id:
                     out.field_id = field.id
-                if out.unit == "EUR" and out.currency is None:
-                    out.currency = "EUR"
 
                 # --- fallback: try to extract current/prev pair if model failed ---
                 if out.status != "ok" or out.value is None:
@@ -201,8 +199,6 @@ class OllamaLLM(LLMClient):
                         out.value = fallback.get("value")
                         if "unit" in fallback and fallback["unit"]:
                             out.unit = fallback["unit"]
-                        if "currency" in fallback and fallback["currency"]:
-                            out.currency = fallback["currency"]
                         if "scale" in fallback:
                             out.scale = fallback["scale"]
                         if "scale_source" in fallback:
@@ -243,11 +239,10 @@ class OllamaLLM(LLMClient):
         return ExtractionLLM(
             field_id=field.id,
             status="ambiguous",
-            value=None,
+            value_unscaled=None,
+            value_scaled=None,
             unit=field.unit if field.unit in ("EUR", "%") else None,
             scale=None,
-            currency="EUR" if field.unit == "EUR" else None,
-            period_end=None,
             evidence=[Evidence(page=page_start, ref=None)],
             source_text=None,
             scale_source=None,
@@ -258,26 +253,33 @@ class OllamaLLM(LLMClient):
     def _build_prompt(
         self, field: FieldDef, text: str, page_start: int, page_end: int
     ) -> str:
-        kw = ", ".join((field.keywords or [])[:8])
+        field_keywords = "bzw. ".join((field.keywords or []))
         return f"""
-You are an information extraction engine for Solvency II SFCR sections.
+Deine Aufgabe ist es, den Wert für die {field_keywords} aus dem folgenden TEXT auszulesen.
+Bitte gib das Ergebnis im JSON-Format mit den folgenden Feldern aus:
+"status", "value_unscaled", "value_scaled", "scale", "unit",
+mit den folgenden Datentypen bzw. zugelassenen Werten:
+"status": str
+"value_unscaled": float | None
+"value_scaled": float | None
+"scale": 1 | 1e3 | 1e6 | None
+"unit": "EUR" | "%" | None
+Wenn Du keinen eindeutigen Wert finden kannst, gib im Feld "status" "ambiguous" oder "not found" zurück und gib für die übrigen Werte None zurück.
+Wenn Du einen eindeutigen Wert finden kannst, gib den unskalierten Wert im Feld "value_unscaled" zurück und gib den skalierten Wert im Feld "value_scaled" zurück.
+D.h., im Feld value_scaled und im Feld value_unscaled soll jeweils genau ein float-Wert stehen (oder None, wenn kein eindeutiger Wert gefunden wird).
+Gib die Skalierung im Feld "scale" zurück. Die Skalierung ist entweder 1 oder 1e3 oder 1e6 oder None.
+Falls der Wert mit EUR beschrieben ist, gib 1 für die "scale" zurück.
+Falls der Wert im Text mit TEUR oder Tausend Euro beschrieben ist, gib 1e3 für die "scale" zurück.
+Gib die Einheit (entweder "EUR" oder "%" oder None) im Feld "unit" zurück.
+Falls Du einen Wert gefolgt von einem zweiten Wert in Klammern findest, dann bezieht sich der erste Wert auf das aktuelle Jahr und der Wert in Klammern auf das Vorjahr.
+Da wir hier den aktuellen Wert suchen, gib in diesem Fall den ersten Wert zurück.
+Beachte, dass die Zahlen in deutschem Format angegeben sind, mit . oder Leerzeichen als Tausendertrennzeichen und , als Dezimaltrennzeichen.
+Zum Beispiel, falls Du den folgenden Text findest:
+"die Mindestkapitalanforderung betrug 123 456 (133 333) TEUR. Gib das folgende Ergebnis zurück:
+{{"status": "ok", "value_unscaled", 123456.0, "value_scaled": 123456000.0, "scale": 1e3, "unit": EUR}}
 
-Task:
-Extract exactly one value for the field below from the provided section snippet.
-If the value is not uniquely and explicitly present, set status "not_found" or "ambiguous" and leave numeric fields null.
-
-Field:
-- field_id: {field.id}
-- expected_unit: {field.unit}
-- page_range: {page_start}-{page_end}
-- helpful_keywords: {kw or "-"}
-
-{_JSON_SCHEMA_HINT}
-
-Section text (German, pages {page_start}-{page_end}):
----
+TEXT:
 {text}
----
 """.strip()
 
     def _parse_json_tolerant(self, raw: str, *, field_id: str) -> Dict[str, Any]:
@@ -340,8 +342,6 @@ Section text (German, pages {page_start}-{page_end}):
             "value": None,
             "unit": None,
             "scale": None,
-            "currency": None,
-            "period_end": None,
             "evidence": [],
             "source_text": None,
             "scale_source": None,
@@ -352,17 +352,11 @@ Section text (German, pages {page_start}-{page_end}):
         d = dict(data)
 
         # Defaults for top-level fields
-        d.setdefault("field_id", field_id)
         d.setdefault("status", None)  # infer status below
-        d.setdefault("value", None)
-        d.setdefault("unit", None)
+        d.setdefault("value_unscaled", None)
+        d.setdefault("value_scaled", None)
         d.setdefault("scale", None)
-        d.setdefault("currency", None)
-        d.setdefault("period_end", None)
-        d.setdefault("evidence", [])
-        d.setdefault("source_text", None)
-        d.setdefault("scale_source", None)
-        d.setdefault("notes", None)
+        d.setdefault("unit", None)
 
         # ---- Infer status if the model omitted it ------------------------------
         # If value is present and numeric -> assume "ok"; else "not_found".
@@ -373,38 +367,6 @@ Section text (German, pages {page_start}-{page_end}):
                 d["status"] = "ok"
             else:
                 d["status"] = "not_found"
-
-        # ---- Normalize evidence and ensure snippet_hash ------------------------
-        ev_list = d.get("evidence") or []
-        src_text = d.get("source_text")
-        if isinstance(ev_list, list):
-            fixed = []
-            for ev in ev_list:
-                if not isinstance(ev, dict):
-                    # Coerce non-dict entries into a minimal dict
-                    ev = {"page": None, "ref": str(ev)}
-                ev.setdefault("page", None)
-                ev.setdefault("ref", None)
-
-                sh = ev.get("snippet_hash")
-                if not (isinstance(sh, str) and _SNIPPET_HEX_RE.fullmatch(sh)):
-                    # Build a deterministic hash from best-available parts.
-                    # Priority: source_text (stable snippet) → ref → field_id+page
-                    page = ev.get("page")
-                    ref = ev.get("ref")
-                    ev["snippet_hash"] = _mk_snippet_hash(src_text, ref, field_id, page)
-
-                fixed.append(ev)
-            d["evidence"] = fixed
-        else:
-            # If evidence is not a list, normalize to a single generated item
-            d["evidence"] = [
-                {
-                    "page": None,
-                    "ref": None,
-                    "snippet_hash": _mk_snippet_hash(src_text, field_id),
-                }
-            ]
 
         return d
 

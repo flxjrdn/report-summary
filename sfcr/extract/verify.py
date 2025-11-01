@@ -149,8 +149,6 @@ def verify_extraction(
         verified=False,
         value_canonical=None,
         unit=extr.unit,
-        currency=extr.currency,
-        period_end=extr.period_end,
         confidence=0.0,
         evidence=extr.evidence,
         source_text=extr.source_text,

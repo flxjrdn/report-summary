@@ -21,6 +21,9 @@ _RE_MANY_SPACES = re.compile(r"[ \t]{2,}")
 
 
 def normalize_hyphenation(text: str) -> str:
+    """
+    Removes hyphenation and line breaks that occur within words.
+    """
     if not text:
         return text
     s = text
