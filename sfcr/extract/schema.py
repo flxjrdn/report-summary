@@ -5,7 +5,7 @@ from typing import List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-Status = Literal["ok", "not_found", "ambiguous"]
+Status = Literal["ok", "not_found"]
 
 
 class Evidence(BaseModel):
@@ -15,11 +15,16 @@ class Evidence(BaseModel):
     snippet_hash: Optional[str] = Field(default=None, pattern=r"^[a-f0-9]{8,64}$")
 
 
-class ExtractionLLM(BaseModel):
-    """
-    The model MUST return this (pre-verification).
-    """
+class ResponseLLM(BaseModel):
+    status: Status
+    value_unscaled: float
+    value_scaled: float
+    scale: Optional[Literal[1, 1_000, 1_000_000]] = None
+    unit: Optional[Literal["EUR", "%"]] = None
+    source_text: Optional[str] = Field(default=None)
 
+
+class ExtractionLLM(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     field_id: str

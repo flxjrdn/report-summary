@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import requests
 
 from sfcr.extract.extractor import FieldDef, LLMClient
-from sfcr.extract.schema import Evidence, ExtractionLLM
+from sfcr.extract.schema import Evidence, ExtractionLLM, ResponseLLM
 
 _SNIPPET_HEX_RE = re.compile(r"^[a-f0-9]{8,64}$")
 _NBSP = "\u00a0"
@@ -88,32 +88,6 @@ def _mk_snippet_hash(*parts: Any, length: int = 16) -> str:
 
 
 # -----------------------------------------------------------------------------
-# TODO löschen?
-_JSON_SCHEMA_HINT = """
-Return ONLY a single JSON object with the following keys:
-- status (string)    -> one of: "ok", "not_found", "ambiguous"
-- value (number|null)          # numeric magnitude as printed (UNSCALED)
-- unit ("EUR"|"%"|null)        # "EUR" for amounts; "%" for percentages
-
-Rules:
-- Parse numbers in German locale (thousands '.' and decimal ',').
-- Keep "value" UNscaled; put the magnitude in "scale".
-- If you cannot find a unique value, set status "not_found" or "ambiguous" and leave numeric fields null.
-- Output ONLY JSON, with no extra text.
-
-Example:
-For the following EXAMPLE_TEXT, you should return exactly the given EXAMPLE_OUTPUT:
-EXAMPLE_TEXT:
-Die Methodik des internen Modells wird im \nAbschnitt E.4 beschrieben. Die Solvabilitätskapitalanforderung der \nAllianz Privaten Krankenversicherungs-AG zum 31. Dezember 2024 \nbeträgt 1 312 850 (1 419 234) Tausend Euro, dieMindestkapitalanforderung 328 213 (354 808) Tausend Euro. \nDer Quotient aus den anrechnungsfähigen Eigenmitteln und der \nSolvabilitätskapitalanforderung ergibt die Solvabilitätsquote nach \nSolvency II. Eine ausreichende Kapitalreserve für Extremszenarien wird \nab einer Solvabilitätsquote von mindestens 100 Prozent (aufsichtsrechtliche Mindestbedeckung) erreicht.
-EXAMPLE_OUTPUT:
-{
-  "status": "ok",
-  "value_unscaled" : 328213,
-  "unit" : "EUR",
-}
-"""
-
-
 @dataclass
 class OllamaLLM(LLMClient):
     """
@@ -163,7 +137,7 @@ class OllamaLLM(LLMClient):
             try:
                 data = {
                     "model": self.model,
-                    "format": "json",
+                    "format": ResponseLLM.model_json_schema(),
                     "prompt": prompt,
                     "stream": False,
                     "options": {
@@ -176,47 +150,29 @@ class OllamaLLM(LLMClient):
                     f"{self.host}/api/generate", json=data, timeout=self.timeout_s
                 )
                 r.raise_for_status()
-                resp_text = r.text
+
                 try:
                     resp = r.json()
                 except Exception as e:
                     # Save the raw HTTP text for diagnosis and re-raise
                     if self.debug_raw:
-                        self._save_debug(field, prompt, resp_text, e)
+                        self._save_debug(field, prompt, r.text, e)
                     raise
+                # Ollama returns text in r.json()["response"]; with format set to a schema,
+                # this should be a JSON string matching the schema.
                 raw = resp.get("response", "")
-                data = self._parse_json_tolerant(raw, field_id=field.id)
-                out = ExtractionLLM(**data)
-                if not out.evidence:
-                    out.evidence = [Evidence(page=page_start, ref=None)]
-                if out.field_id != field.id:
-                    out.field_id = field.id
-
-                # --- fallback: try to extract current/prev pair if model failed ---
-                if out.status != "ok" or out.value is None:
-                    fallback = _extract_current_prev_pair(bounded)
-                    if fallback is not None:
-                        out.value = fallback.get("value")
-                        if "unit" in fallback and fallback["unit"]:
-                            out.unit = fallback["unit"]
-                        if "scale" in fallback:
-                            out.scale = fallback["scale"]
-                        if "scale_source" in fallback:
-                            out.scale_source = fallback["scale_source"]
-                        out.status = "ok"
-                        stxt = fallback.get("source_text")
-                        if stxt:
-                            out.source_text = stxt[:200]
-                        # Evidence: ensure at least one
-                        if not out.evidence:
-                            out.evidence = [Evidence(page=page_start, ref=None)]
-                        # Notes: append
-                        note = "prev_in_parentheses_detected"
-                        if out.notes:
-                            if note not in out.notes:
-                                out.notes += f";{note}"
-                        else:
-                            out.notes = note
+                parsed = ResponseLLM.model_validate_json(raw)
+                out = ExtractionLLM(
+                    field_id=field.id,
+                    status=parsed.status,
+                    value_unscaled=parsed.value_unscaled,
+                    value_scaled=parsed.value_scaled,
+                    unit=parsed.unit,
+                    evidence=[Evidence(page=page_start, ref=None)],
+                    source_text=parsed.source_text,
+                    scale_source=None,
+                    notes=None,
+                )
 
                 if self.enable_cache:
                     self._write_cache(cache_key, out)
@@ -238,7 +194,7 @@ class OllamaLLM(LLMClient):
 
         return ExtractionLLM(
             field_id=field.id,
-            status="ambiguous",
+            status="not_found",
             value_unscaled=None,
             value_scaled=None,
             unit=field.unit if field.unit in ("EUR", "%") else None,
@@ -253,30 +209,37 @@ class OllamaLLM(LLMClient):
     def _build_prompt(
         self, field: FieldDef, text: str, page_start: int, page_end: int
     ) -> str:
-        field_keywords = "bzw. ".join((field.keywords or []))
+        field_keywords = " bzw. ".join((field.keywords or []))
         return f"""
-Deine Aufgabe ist es, den Wert für die {field_keywords} aus dem folgenden TEXT auszulesen.
-Bitte gib das Ergebnis im JSON-Format mit den folgenden Feldern aus:
-"status", "value_unscaled", "value_scaled", "scale", "unit",
-mit den folgenden Datentypen bzw. zugelassenen Werten:
-"status": str
-"value_unscaled": float | None
-"value_scaled": float | None
-"scale": 1 | 1e3 | 1e6 | None
-"unit": "EUR" | "%" | None
-Wenn Du keinen eindeutigen Wert finden kannst, gib im Feld "status" "ambiguous" oder "not found" zurück und gib für die übrigen Werte None zurück.
-Wenn Du einen eindeutigen Wert finden kannst, gib den unskalierten Wert im Feld "value_unscaled" zurück und gib den skalierten Wert im Feld "value_scaled" zurück.
-D.h., im Feld value_scaled und im Feld value_unscaled soll jeweils genau ein float-Wert stehen (oder None, wenn kein eindeutiger Wert gefunden wird).
-Gib die Skalierung im Feld "scale" zurück. Die Skalierung ist entweder 1 oder 1e3 oder 1e6 oder None.
-Falls der Wert mit EUR beschrieben ist, gib 1 für die "scale" zurück.
-Falls der Wert im Text mit TEUR oder Tausend Euro beschrieben ist, gib 1e3 für die "scale" zurück.
-Gib die Einheit (entweder "EUR" oder "%" oder None) im Feld "unit" zurück.
-Falls Du einen Wert gefolgt von einem zweiten Wert in Klammern findest, dann bezieht sich der erste Wert auf das aktuelle Jahr und der Wert in Klammern auf das Vorjahr.
-Da wir hier den aktuellen Wert suchen, gib in diesem Fall den ersten Wert zurück.
-Beachte, dass die Zahlen in deutschem Format angegeben sind, mit . oder Leerzeichen als Tausendertrennzeichen und , als Dezimaltrennzeichen.
-Zum Beispiel, falls Du den folgenden Text findest:
-"die Mindestkapitalanforderung betrug 123 456 (133 333) TEUR. Gib das folgende Ergebnis zurück:
-{{"status": "ok", "value_unscaled", 123456.0, "value_scaled": 123456000.0, "scale": 1e3, "unit": EUR}}
+Deine Aufgabe ist es, den Wert für {field_keywords} aus dem folgenden TEXT auszulesen.
+
+Gib das Ergebnis **ausschließlich als JSON-Objekt** mit diesen Feldern zurück:
+"status", "value_unscaled", "value_scaled", "scale", "unit", "source_text"
+Regeln:
+1) Wenn ein eindeutiger Wert gefunden wird:
+   - "status": "ok"
+   - "value_unscaled": der unskalierte Zahlenwert (z. B. 123456.0)
+   - "value_scaled": "value_unscaled" multipliziert mit "scale"
+   - "scale": 1 bei EUR, 1000 bei TEUR/Tausend Euro, 1000000 bei Mio. Euro; sonst null, wenn keine Skalierung ableitbar ist
+   - "unit": "EUR" oder "%"
+   - "source_text": eine kurze Fundstelle (max. 200 Zeichen) aus dem TEXT, die den Wert enthält
+2) Wenn kein eindeutiger Wert gefunden wird, setze "status" auf "not_found" und alle übrigen Felder auf null.
+3) Zahlen sind im deutschen Format zu interpretieren: Punkt oder Leerzeichen als Tausendertrennzeichen, Komma als Dezimaltrennzeichen.
+4) Wenn ein Wert gefolgt von einem zweiten Wert in Klammern vorkommt, bezieht sich der erste auf das aktuelle Jahr und der Klammerwert auf das Vorjahr – gib den ersten Wert zurück.
+5) Gib **nur** das JSON-Objekt zurück, ohne zusätzliche Erklärungen oder Text.
+
+Beispiel:
+Text: "Die Solvenzkapitalanforderung betrug 200 000 (211 111) TEUR. Die Mindestkapitalanforderung betrug 123 456 (133 333) TEUR."
+Erwartete Ausgabe:
+{{
+  "status": "ok",
+  "value_unscaled": 123456.0,
+  "value_scaled": 123456000.0,
+  "scale": 1000,
+  "unit": "EUR",
+  "source_text": "Die Mindestkapitalanforderung betrug 123 456 (133 333) TEUR."
+}}
+Ende des Beispiels.
 
 TEXT:
 {text}
@@ -338,7 +301,7 @@ TEXT:
         # 5) Give up: abstain safely
         return {
             "field_id": field_id,
-            "status": "ambiguous",
+            "status": "not_found",
             "value": None,
             "unit": None,
             "scale": None,
