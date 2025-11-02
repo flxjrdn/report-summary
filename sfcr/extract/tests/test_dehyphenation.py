@@ -1,4 +1,4 @@
-from sfcr.extract.textnorm import normalize_hyphenation
+from sfcr.utils.textnorm import normalize_hyphenation
 
 
 def test_dehyphenation_example():

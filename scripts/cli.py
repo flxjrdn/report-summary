@@ -14,7 +14,8 @@ from sfcr.eval.eval import evaluate, format_report, load_gold, load_preds
 from sfcr.eval.goldgen import generate_gold
 from sfcr.extract.batch import extract_directory
 from sfcr.extract.extractor import extract_for_document, write_jsonl
-from sfcr.extract.llm_factory import create_llm
+from sfcr.extract.llm_client_factory import create_llm_client
+from sfcr.summarize.summarize import run_summarize
 
 # If not installed in editable mode, add repo root to PYTHONPATH
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -48,7 +49,7 @@ def ingest(
     cfg = get_settings()
     # Resolve effective paths
     effective_src: Path = src or cfg.data_dir
-    effective_out: Path = outdir or cfg.output_dir
+    effective_out: Path = outdir or cfg.output_dir_ingest
 
     files = (
         [effective_src]
@@ -105,9 +106,9 @@ def validate_dir(
         None, help="Directory containing .ingest.json; defaults to SFCR_OUTPUT"
     ),
 ):
-    """Validate all *.ingest.json in a directory (defaults to cfg.output_dir)."""
+    """Validate all *.ingest.json in a directory (defaults to cfg.output_dir_ingest)."""
     cfg = get_settings()
-    target = dirpath or cfg.output_dir
+    target = dirpath or cfg.output_dir_ingest
 
     files = sorted(target.glob("*.ingest.json"))
     if not files:
@@ -129,7 +130,8 @@ def extract(
         None, help="Path to fields.yaml (default: sfcr/extract/fields.yaml)"
     ),
     out: Path = typer.Option(
-        None, help="Output JSONL (default: <output_dir>/<doc_id>.extractions.jsonl)"
+        None,
+        help="Output JSONL (default: <output_dir_extract>/<doc_id>.extractions.jsonl)",
     ),
     provider: str = typer.Option("mock", help="LLM provider: ollama | mock"),
     model: str = typer.Option(
@@ -146,7 +148,7 @@ def extract(
     doc_id = pdf.stem
 
     if ingest_json is None:
-        cand = Path(cfg.output_dir) / f"{doc_id}.ingest.json"
+        cand = Path(cfg.output_dir_ingest) / f"{doc_id}.ingest.json"
         if not cand.exists():
             typer.secho(f"Missing ingestion JSON: {cand}", fg="red")
             raise typer.Exit(1)
@@ -159,9 +161,9 @@ def extract(
             raise typer.Exit(1)
 
     if out is None:
-        out = Path(cfg.output_dir) / f"{doc_id}.extractions.jsonl"
+        out = Path(cfg.output_dir_extract) / f"{doc_id}.extractions.jsonl"
 
-    llm = create_llm(provider, model=model)
+    llm = create_llm_client(provider, model=model)
     rows = extract_for_document(doc_id, pdf, ingest_json, fields, llm=llm)
     write_jsonl(rows, out)
     print(f"[green]✓[/green] wrote {out}")
@@ -193,13 +195,13 @@ def extract_dir(
         typer.secho(f"fields.yaml not found: {fields}", fg="red")
         raise typer.Exit(1)
 
-    llm = create_llm(provider, model=model)
+    llm = create_llm_client(provider, model=model)
 
     processed, skipped, _ = extract_directory(
         src_dir=src_dir,
         fields_yaml=fields,
         pattern=pattern,
-        out_dir=cfg.output_dir,
+        out_dir=cfg.output_dir_extract,
         llm=llm,  # reuse same client across PDFs
         resume=resume,
         limit=None if limit is None or limit < 0 else int(limit),
@@ -214,7 +216,7 @@ def eval(
         Path("data/gold/gold.csv"), help="Gold CSV (doc_id,field_id,unit,value)"
     ),
     preds_dir: Path = typer.Option(
-        None, help="Dir containing *.extractions.jsonl (defaults to output_dir)"
+        None, help="Dir containing *.extractions.jsonl (defaults to output_dir_extract)"
     ),
     report_out: Path = typer.Option(None, help="Optional path to write a text report"),
 ):
@@ -222,7 +224,7 @@ def eval(
     Evaluate verified extractions against a small gold set.
     """
     cfg = get_settings()
-    preds_root = preds_dir or cfg.output_dir
+    preds_root = preds_dir or cfg.output_dir_extract
 
     gold = load_gold(gold_csv)
     preds = load_preds(preds_root)
@@ -262,6 +264,60 @@ def gold(
         out_path=out, only_verified=not include_unverified, backup=not no_backup
     )
     print(f"[green]✓[/green] gold written to {path}")
+
+
+@app.command()
+def summarize(
+    pdf: Path = typer.Option(
+        None,
+        help="Path to PDF; defaults to <data_dir>/<doc_id>.pdf (or recursive search)",
+    ),
+    ingest_json: Path = typer.Option(
+        None,
+        help="Path to *.ingest.json; defaults to <output_dir_ingest>/<doc_id>.ingest.json",
+    ),
+    out: Path = typer.Option(
+        None,
+        help="Output JSONL; defaults to <output_dir_extract>/summaries/<doc_id>.summaries.jsonl",
+    ),
+    provider: str = typer.Option("mock", help="LLM provider (e.g., 'ollama')"),
+    model: str = typer.Option("mock", help="Model name for provider (e.g., 'mistral')"),
+):
+    """
+    Create a concise, section-level summary (A–E) JSONL for DOC_ID.
+    """
+    cfg = get_settings()
+
+    if pdf is None:
+        pdfs = sorted(Path(cfg.data_dir).glob("*.pdf"))
+        if not pdfs:
+            typer.secho("No PDFs found; specify --pdf", fg="red")
+            raise typer.Exit(1)
+        pdf = pdfs[0]
+    doc_id = pdf.stem
+
+    if ingest_json is None:
+        cand = Path(cfg.output_dir_ingest) / f"{doc_id}.ingest.json"
+        if not cand.exists():
+            typer.secho(f"Missing ingestion JSON: {cand}", fg="red")
+            raise typer.Exit(1)
+        ingest_json = cand
+
+    if out is None:
+        out = Path(cfg.output_dir_summaries) / f"{doc_id}.summaries.jsonl"
+
+    out.parent.mkdir(parents=True, exist_ok=True)
+
+    # Run summarization
+    path = run_summarize(
+        doc_id=doc_id,
+        pdf_path=pdf,
+        ingest_json=ingest_json,
+        out_jsonl=out,
+        provider=provider,
+        model=model,
+    )
+    print(f"[green]✓[/green] wrote {path}")
 
 
 @app.command("db-init")

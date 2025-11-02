@@ -74,6 +74,12 @@ eval:
 gold:
 	$(PYTHON) scripts/cli.py gold
 
+summarize:
+	$(PYTHON) scripts/cli.py summarize --provider mock --model mock
+
+summarize-ollama:
+	$(PYTHON) scripts/cli.py summarize --provider ollama --model mistral
+
 ui:
 	$(PYTHON) scripts/cli.py ui
 
@@ -88,4 +94,4 @@ clean:
 	rm -rf __pycache__ .pytest_cache artifacts/ingest/*.json artifacts/*.json
 
 # These targets do not refer to files - always run them
-.PHONY: help install test ingest validate schema extract extract-dir extract-ollama extract-dir-ollama eval gold ui db-init db-load clean
+.PHONY: help install test ingest validate schema extract extract-dir extract-ollama extract-dir-ollama eval gold summarize ui db-init db-load clean

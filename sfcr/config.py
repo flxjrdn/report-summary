@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pydantic import Field, field_validator
+from pydantic import Field, computed_field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     )
 
     data_dir: Path = Field(default=Path("data") / "samples", env="SFCR_DATA")
-    output_dir: Path = Field(default=Path("artifacts") / "ingest", env="SFCR_OUTPUT")
+    output_dir: Path = Field(default=Path("artifacts"), env="SFCR_OUTPUT")
     schema_file: Path = Field(default=Path("schema") / "ingestion.schema.json")
 
     @field_validator("data_dir", "output_dir", "schema_file", mode="after")
@@ -46,6 +46,24 @@ class Settings(BaseSettings):
             return v.expanduser()
         return v
 
+    @computed_field(return_type=Path)
+    def output_dir_ingest(self) -> Path:
+        dir_ingest = self.output_dir / "ingest"
+        dir_ingest.mkdir(parents=True, exist_ok=True)
+        return dir_ingest
+
+    @computed_field(return_type=Path)
+    def output_dir_extract(self) -> Path:
+        dir_extract = self.output_dir / "extract"
+        dir_extract.mkdir(parents=True, exist_ok=True)
+        return dir_extract
+
+    @computed_field(return_type=Path)
+    def output_dir_summaries(self) -> Path:
+        dir_summaries = self.output_dir / "summaries"
+        dir_summaries.mkdir(parents=True, exist_ok=True)
+        return dir_summaries
+
     def model_post_init(self, __context) -> None:
         # Resolve relative paths against project_root
         if not self.data_dir.is_absolute():
@@ -57,6 +75,9 @@ class Settings(BaseSettings):
 
         # Ensure output dir exists
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.output_dir_ingest.mkdir(parents=True, exist_ok=True)
+        self.output_dir_extract.mkdir(parents=True, exist_ok=True)
+        self.output_dir_summaries.mkdir(parents=True, exist_ok=True)
 
 
 # Lazy singleton

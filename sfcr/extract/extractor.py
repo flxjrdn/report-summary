@@ -9,9 +9,9 @@ import fitz  # PyMuPDF
 import yaml
 
 from sfcr.extract.schema import Evidence, ExtractionLLM, VerifiedExtraction
-from sfcr.extract.textnorm import normalize_hyphenation
 from sfcr.extract.verify import verify_extraction
 from sfcr.ingest.schema import IngestionResult
+from sfcr.utils.textnorm import normalize_hyphenation
 
 # ---------- field taxonomy ----------
 
@@ -213,7 +213,7 @@ def extract_for_document(
     fields_yaml: Path,
     llm: Optional[LLMClient] = None,
 ) -> List[VerifiedExtraction]:
-    """
+    """f
     Run extraction + verification for a single document.
     """
     if llm is None:
