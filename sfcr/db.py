@@ -97,7 +97,7 @@ def load_extractions_from_dir(
     Returns: (n_docs_updated, n_rows_upserted)
     """
     cfg = get_settings()
-    root = out_dir or Path(cfg.output_dir)
+    root = out_dir or Path(cfg.output_dir_extract)
     con = connect(db_path)
     cur = con.cursor()
 

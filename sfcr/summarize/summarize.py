@@ -100,7 +100,7 @@ def _section_prompt(section: Section) -> str:
     )
 
 
-def _synthesis_prompt(section: Section) -> str:
+def _synthesis_prompt() -> str:
     return (
         "You are given multiple partial summaries of the same SFCR section. "
         "Merge them into 3–6 bullets, removing duplication, keeping the most precise numbers. "
@@ -139,7 +139,7 @@ def summarize_section(
         return partials[0]
 
     joined = "\n\n---\n\n".join(partials)
-    synth = _synthesis_prompt(section).replace("{bullets}", joined)
+    synth = _synthesis_prompt().replace("{bullets}", joined)
     final = _call_llm_generate(llm, synth)
     return final or joined
 
