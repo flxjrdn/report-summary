@@ -13,6 +13,16 @@ endif
 export SFCR_DATA
 export SFCR_OUTPUT
 
+# ---  Model / Provider config ----------------------------------
+# MODEL controls which model to use; override on the command line: make extract MODEL=mistral
+MODEL ?= mock
+# Infer provider from MODEL (override with PROVIDER=... if needed)
+ifeq ($(MODEL),mock)
+  PROVIDER ?= mock
+else
+  PROVIDER ?= ollama
+endif
+
 # Default target when you run "make"
 .DEFAULT_GOAL := help
 
@@ -26,9 +36,8 @@ help:
 	@echo "  ingest              Run ingestion on sample PDFs"
 	@echo "  validate            Validate produced *.ingest.json files"
 	@echo "  schema              Regenerate ingestion JSON Schema"
-	@echo "  extract             Extract values from ingested PDF"
-	@echo "  extract-ollama      Extract using Ollama provider with mistral model"
-	@echo "  extract-dir-ollama  Extract from directory using Ollama and mistral model"
+	@echo "  extract             Extract values (MODEL=$(MODEL), PROVIDER=$(PROVIDER))"
+	@echo "  extract-dir         Extract all ingested docs (MODEL=$(MODEL), PROVIDER=$(PROVIDER))"
 	@echo "  eval                Evaluate extraction results against gold CSV file"
 	@echo "  gold                Generate gold standard data"
 	@echo "  ui                  Launch the user interface"
@@ -57,16 +66,10 @@ schema:
 	(echo "Schema changed — bump schema_version and update examples." && exit 1)
 
 extract:
-	$(PYTHON) scripts/cli.py extract $(PDF)
+	$(PYTHON) scripts/cli.py extract $(PDF) --provider $(PROVIDER) --model $(MODEL)
 
 extract-dir:
-	$(PYTHON) scripts/cli.py extract-dir
-
-extract-ollama:
-	$(PYTHON) scripts/cli.py extract --provider ollama --model mistral
-
-extract-dir-ollama:
-	$(PYTHON) scripts/cli.py extract-dir --provider ollama --model mistral
+	$(PYTHON) scripts/cli.py extract-dir --provider $(PROVIDER) --model $(MODEL)
 
 eval:
 	$(PYTHON) scripts/cli.py eval
@@ -75,10 +78,11 @@ gold:
 	$(PYTHON) scripts/cli.py gold
 
 summarize:
-	$(PYTHON) scripts/cli.py summarize --provider mock --model mock
+	$(PYTHON) scripts/cli.py summarize --provider $(PROVIDER) --model $(MODEL)
 
-summarize-ollama:
-	$(PYTHON) scripts/cli.py summarize --provider ollama --model mistral
+
+summarize-dir:
+	$(PYTHON) scripts/cli.py summarize-dir --provider $(PROVIDER) --model $(MODEL)
 
 ui:
 	$(PYTHON) scripts/cli.py ui
@@ -94,4 +98,4 @@ clean:
 	rm -rf __pycache__ .pytest_cache artifacts/ingest/*.json artifacts/*.json
 
 # These targets do not refer to files - always run them
-.PHONY: help install test ingest validate schema extract extract-dir extract-ollama extract-dir-ollama eval gold summarize ui db-init db-load clean
+.PHONY: help install test ingest validate schema extract extract-dir eval gold summarize summarize-dir ui db-init db-load clean
