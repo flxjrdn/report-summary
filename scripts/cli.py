@@ -8,7 +8,7 @@ from pathlib import Path
 import typer
 from rich import print
 
-from sfcr.db import init_db as db_init
+from sfcr.db import init_db as db_init, load_catalog
 from sfcr.db import load_extractions_from_dir, load_summaries_from_dir
 from sfcr.eval.eval import evaluate, format_report, load_gold, load_preds
 from sfcr.eval.goldgen import generate_gold
@@ -34,21 +34,38 @@ def _sha256(p: Path) -> str:
 
 @app.command()
 def ingest(
+    doc_id: str,
+    outdir: Path = typer.Option(
+            None, "--outdir", help="Output dir; defaults to SFCR_OUTPUT or repo default"
+        ),
+):
+    if doc_id is None:
+        raise ValueError(f"{doc_id} is required when calling ingest for a single file")
+
+    cfg = get_settings()
+    pdf_path = cfg.pdfs_dir / f"{doc_id}.pdf"
+    if not pdf_path.is_file():
+        raise ValueError(
+            f"the specified doc_id has to refer to an existing PDF: {pdf_path}, but this file does not exist"
+        )
+    ingest_dir(src=pdf_path, outdir=outdir)
+
+@app.command()
+def ingest_dir(
     src: Path = typer.Argument(
         None, help="PDF path or directory; defaults to SFCR_DATA or repo default"
     ),
     outdir: Path = typer.Option(
         None, "--outdir", help="Output dir; defaults to SFCR_OUTPUT or repo default"
     ),
-    doc_id: str = typer.Option(None, help="Optional override for single-file ingest"),
 ):
     """
-    Ingest a PDF or a directory of PDFs.
+    Ingest a directory of PDFs.
     Precedence: CLI args > env (SFCR_DATA/SFCR_OUTPUT) > repo defaults.
     """
     cfg = get_settings()
     # Resolve effective paths
-    effective_src: Path = src or cfg.data_dir
+    effective_src: Path = src or cfg.pdfs_dir
     effective_out: Path = outdir or cfg.output_dir_ingest
 
     files = (
@@ -61,13 +78,13 @@ def ingest(
         raise typer.Exit(1)
 
     for p in files:
-        did = doc_id or p.stem
-        ing = SFCRIngestor(doc_id=did, pdf_path=str(p))
+        doc_id = p.stem
+        ing = SFCRIngestor(doc_id=doc_id, pdf_path=str(p))
         res = ing.run()
 
         payload = {
             "schema_version": "1.0.0",
-            "doc_id": did,
+            "doc_id": doc_id,
             "pdf_sha256": _sha256(p),
             "page_count": ing.loader.page_count(),
             "sections": [s.__dict__ for s in res.sections],
@@ -84,7 +101,7 @@ def ingest(
             sort_keys=True,
             ensure_ascii=False,
         )
-        out_path = effective_out / f"{did}.ingest.json"
+        out_path = effective_out / f"{doc_id}.ingest.json"
         out_path.write_text(
             json_text,
             encoding="utf-8",
@@ -92,38 +109,10 @@ def ingest(
         print(f"[green]✓[/green] {p.name} → {out_path}")
 
 
-@app.command("validate")
-def validate_file(json_path: Path):
-    """Validate a single *.ingest.json against the schema."""
-    data = json.loads(json_path.read_text(encoding="utf-8"))
-    IngestionResult(**data)
-    print("[green]OK[/green]")
-
-
-@app.command("validate-dir")
-def validate_dir(
-    dirpath: Path = typer.Argument(
-        None, help="Directory containing .ingest.json; defaults to SFCR_OUTPUT"
-    ),
-):
-    """Validate all *.ingest.json in a directory (defaults to cfg.output_dir_ingest)."""
-    cfg = get_settings()
-    target = dirpath or cfg.output_dir_ingest
-
-    files = sorted(target.glob("*.ingest.json"))
-    if not files:
-        typer.secho(f"No .ingest.json files found in {target}", fg="yellow")
-        raise typer.Exit(1)
-    for f in files:
-        data = json.loads(f.read_text(encoding="utf-8"))
-        IngestionResult(**data)
-        print(f"[green]OK[/green] {f.name}")
-
-
 @app.command()
 def extract(
     pdf: Path = typer.Argument(
-        None, help="PDF path; defaults to first PDF under data_dir"
+        None, help="PDF path; defaults to first PDF under pdfs_dir"
     ),
     ingest_json: Path = typer.Option(None, help="Path to *.ingest.json for this PDF"),
     fields: Path = typer.Option(
@@ -140,7 +129,7 @@ def extract(
 ):
     cfg = get_settings()
     if pdf is None:
-        pdfs = sorted(Path(cfg.data_dir).glob("*.pdf"))
+        pdfs = sorted(Path(cfg.pdfs_dir).glob("*.pdf"))
         if not pdfs:
             typer.secho("No PDFs found; specify --pdf", fg="red")
             raise typer.Exit(1)
@@ -187,7 +176,7 @@ def extract_dir(
     ),
 ):
     cfg = get_settings()
-    src_dir = src or Path(cfg.data_dir)
+    src_dir = src or Path(cfg.pdfs_dir)
     if not src_dir.exists():
         typer.secho(f"Source dir not found: {src_dir}", fg="red")
         raise typer.Exit(1)
@@ -201,7 +190,6 @@ def extract_dir(
         src_dir=src_dir,
         fields_yaml=fields,
         pattern=pattern,
-        out_dir=cfg.output_dir_extract,
         llm=llm,  # reuse same client across PDFs
         resume=resume,
         limit=None if limit is None or limit < 0 else int(limit),
@@ -270,7 +258,7 @@ def gold(
 def summarize(
     pdf: Path = typer.Option(
         None,
-        help="Path to PDF; defaults to <data_dir>/<doc_id>.pdf (or recursive search)",
+        help="Path to PDF; defaults to <pdfs_dir>/<doc_id>.pdf (or recursive search)",
     ),
     ingest_json: Path = typer.Option(
         None,
@@ -289,7 +277,7 @@ def summarize(
     cfg = get_settings()
 
     if pdf is None:
-        pdfs = sorted(Path(cfg.data_dir).glob("*.pdf"))
+        pdfs = sorted(Path(cfg.pdfs_dir).glob("*.pdf"))
         if not pdfs:
             typer.secho("No PDFs found; specify --pdf", fg="red")
             raise typer.Exit(1)
@@ -320,6 +308,51 @@ def summarize(
     print(f"[green]✓[/green] wrote {path}")
 
 
+@app.command("summarize-dir")
+def summarize_dir(
+    src: Path = typer.Argument(None, help="Directory containing *.ingest.json; defaults to SFCR_OUTPUT/ingest"),
+    provider: str = typer.Option("mock", help="LLM provider (e.g., 'ollama' or 'mock')"),
+    model: str = typer.Option("mock", help="Model name for provider (e.g., 'mistral')"),
+    pattern: str = typer.Option("*.ingest.json", help="Glob pattern for ingestion JSONs"),
+    resume: bool = typer.Option(True, help="Skip docs with existing summaries"),
+    limit: int = typer.Option(-1, help="Process at most N docs; -1 = no limit"),
+):
+    cfg = get_settings()
+    target = src or Path(cfg.output_dir_ingest)
+    files = sorted(target.glob(pattern))
+    if not files:
+        typer.secho(f"No ingestion JSON files found in {target}", fg="red")
+        raise typer.Exit(1)
+    processed = 0
+    skipped = 0
+    for f in files:
+        doc_id = f.name.replace(".ingest.json", "")
+        out_path = Path(cfg.output_dir_summaries) / f"{doc_id}.summaries.jsonl"
+        if resume and out_path.exists():
+            skipped += 1
+            continue
+        pdf = Path(cfg.pdfs_dir) / f"{doc_id}.pdf"
+        if not pdf.exists():
+            pdf = next(Path(cfg.pdfs_dir).rglob(f"{doc_id}.pdf"), None)
+            if pdf is None:
+                typer.secho(f"Warning: PDF not found for {doc_id}, skipping", fg="yellow")
+                skipped += 1
+                continue
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+
+        run_summarize(
+            doc_id=doc_id,
+            pdf_path=pdf,
+            ingest_json=f,
+            out_jsonl=out_path,
+            provider=provider,
+            model=model,
+        )
+        processed += 1
+        if limit >= 0 and processed >= limit:
+            break
+    print(f"[green]✓[/green] Summarize-dir done. Processed: {processed}  Skipped: {skipped}")
+
 @app.command("db-init")
 def db_init_cmd():
     p = db_init()
@@ -328,6 +361,9 @@ def db_init_cmd():
 
 @app.command("db-load")
 def db_load_cmd():
+    n_docs = load_catalog()
+    print(f"[green]✓[/green] loaded {n_docs} documents")
+
     n_docs_extr, n_values_extr = load_extractions_from_dir()
     print(f"[green]✓[/green] loaded {n_values_extr} values from {n_docs_extr} docs")
 

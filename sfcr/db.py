@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import csv
 import hashlib
 import json
+import os.path
 import sqlite3
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -30,11 +32,14 @@ def init_db(db_path: Optional[Path] = None) -> Path:
     # documents: one row per PDF
     cur.execute("""
     CREATE TABLE IF NOT EXISTS documents (
-      doc_id     TEXT PRIMARY KEY,
-      pdf_path   TEXT NOT NULL,
-      sha256     TEXT,
-      page_count INTEGER,
-      updated_at TEXT DEFAULT (datetime('now'))
+      doc_id        TEXT PRIMARY KEY,
+      year          INTEGER NOT NULL,
+      company       TEXT NOT NULL,
+      display_name  TEXT NOT NULL,
+      pdf_path      TEXT NOT NULL,
+      sha256        TEXT,
+      page_count    INTEGER,
+      updated_at    TEXT DEFAULT (datetime('now'))
     );
     """)
     # extractions: one row per (doc_id, field_id)
@@ -96,11 +101,88 @@ def _sha256_file(path: Path) -> str:
 def _find_pdf_for_doc(doc_id: str) -> Optional[Path]:
     """Best-effort: look in SFCR_DATA for <doc_id>.pdf"""
     cfg = get_settings()
-    cand = Path(cfg.data_dir) / f"{doc_id}.pdf"
+    cand = Path(cfg.pdfs_dir) / f"{doc_id}.pdf"
     return cand if cand.exists() else None
 
 
-# ---------- load from *.extractions.jsonl ----------
+def load_catalog(csv_path: Optional[Path] = None, db_path: Optional[Path] = None) -> int:
+    """
+    Upsert rows from a small catalog CSV into the `documents` table.
+
+    Expected CSV headers (minimal):
+      doc_id,year,company,pdf_path
+
+    display_name fallback:
+      "{company} ({year})"
+    """
+    con = connect(db_path)
+    cur = con.cursor()
+
+    n = 0
+
+    cfg = get_settings()
+    catalog_path = csv_path or cfg.data_dir / f"catalog.csv"
+
+    with Path(catalog_path).open("r", encoding="utf-8") as fh:
+        reader = csv.DictReader(fh)
+        for row in reader:
+            doc_id = (row.get("doc_id") or "").strip()
+            if not doc_id:
+                continue
+
+            def _val(k, default=None):
+                v = row.get(k, default)
+                return v.strip() if isinstance(v, str) else v
+
+            year = int(_val("year")) if _val("year") else None
+            company = _val("company")
+            display_name = _val("display_name")
+            pdf_path = Path(_val("pdf_path"))
+
+            if not display_name:
+                # Build a clean, consistent label for the UI
+                if company and year:
+                    display_name = f"{company} ({year})"
+                elif company:
+                    display_name = f"{company}"
+                else:
+                    display_name = f"{doc_id}"
+
+            sha, pages = None, None
+            if pdf_path and pdf_path.exists():
+                try:
+                    import fitz
+
+                    pages = fitz.open(pdf_path).page_count
+                except Exception:
+                    pages = None
+                try:
+                    sha = _sha256_file(pdf_path)
+                except Exception:
+                    sha = None
+
+            cur.execute(
+                """
+                INSERT INTO documents
+                  (doc_id, pdf_path, year, company, display_name, sha256, page_count, updated_at)
+                VALUES
+                  (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                ON CONFLICT(doc_id) DO UPDATE SET
+                  pdf_path     = COALESCE(excluded.pdf_path, documents.pdf_path),
+                  year         = COALESCE(excluded.year, documents.year),
+                  company      = COALESCE(excluded.company, documents.company),
+                  display_name = COALESCE(excluded.display_name, documents.display_name),
+                  sha256       = COALESCE(excluded.sha256, documents.sha256),
+                  page_count   = COALESCE(excluded.page_count, documents.page_count), 
+                  updated_at   = datetime('now');
+                """,
+                (doc_id, str(pdf_path), year, company, display_name, sha, pages),
+            )
+            n += 1
+
+    con.commit()
+    con.close()
+    return n
 
 
 def load_extractions_from_dir(
@@ -117,28 +199,6 @@ def load_extractions_from_dir(
 
     n_docs, n_rows = 0, 0
     for jpath in sorted(root.glob("*.extractions.jsonl")):
-        doc_id = jpath.stem.replace(".extractions", "")
-        # ensure documents row
-        pdf = _find_pdf_for_doc(doc_id)
-        sha, pages = None, None
-        if pdf and pdf.exists():
-            try:
-                import fitz
-
-                pages = fitz.open(pdf).page_count
-            except Exception:
-                pages = None
-            try:
-                sha = _sha256_file(pdf)
-            except Exception:
-                sha = None
-        cur.execute(
-            "INSERT INTO documents(doc_id, pdf_path, sha256, page_count) VALUES(?,?,?,?) "
-            "ON CONFLICT(doc_id) DO UPDATE SET pdf_path=excluded.pdf_path, sha256=COALESCE(excluded.sha256, documents.sha256), page_count=COALESCE(excluded.page_count, documents.page_count), updated_at=datetime('now')",
-            (doc_id, str(pdf or ""), sha, pages),
-        )
-        n_docs += 1
-
         # upsert each extraction line
         with jpath.open("r", encoding="utf-8") as fh:
             for line in fh:
@@ -214,25 +274,6 @@ def load_summaries_from_dir(
                 j = json.loads(line)
                 # ensure documents row exists/updated similarly to extractions
                 doc_id = j["doc_id"]
-                pdf = _find_pdf_for_doc(doc_id)
-                sha, pages = None, None
-                if pdf and pdf.exists():
-                    try:
-                        import fitz
-
-                        pages = fitz.open(pdf).page_count
-                    except Exception:
-                        pages = None
-                    try:
-                        sha = _sha256_file(pdf)
-                    except Exception:
-                        sha = None
-                cur.execute(
-                    "INSERT INTO documents(doc_id, pdf_path, sha256, page_count) VALUES(?,?,?,?) "
-                    "ON CONFLICT(doc_id) DO UPDATE SET pdf_path=excluded.pdf_path, sha256=COALESCE(excluded.sha256, documents.sha256), page_count=COALESCE(excluded.page_count, documents.page_count), updated_at=datetime('now')",
-                    (doc_id, str(pdf or ""), sha, pages),
-                )
-
                 # upsert summary row per (doc_id, section_id)
                 cur.execute(
                     """
@@ -266,10 +307,12 @@ def load_summaries_from_dir(
 
 
 def list_documents(db_path: Optional[Path] = None) -> List[Dict[str, Any]]:
+    if not db_path.is_file():
+        return []
     con = connect(db_path)
     cur = con.cursor()
     rows = cur.execute(
-        "SELECT doc_id, pdf_path, page_count FROM documents ORDER BY doc_id"
+        "SELECT doc_id, display_name, pdf_path, page_count FROM documents ORDER BY display_name"
     ).fetchall()
     con.close()
     return [dict(r) for r in rows]

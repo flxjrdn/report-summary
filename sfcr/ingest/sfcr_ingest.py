@@ -4,7 +4,7 @@ sfcr_ingest.py
 Ingestion pipeline for German SFCR Solo PDFs:
 - Detects section boundaries A..E
 - Detects subsections A.1, B.2, ...
-- Produces structured outputs with confidence & provenance
+- Produces structured outputs
 
 Author: you
 """
@@ -78,20 +78,6 @@ def normalize_text(s: str) -> str:
     return s
 
 
-def roughly_top_left(
-    bbox: Tuple[float, float, float, float], page_rect: fitz.Rect
-) -> float:
-    """Heuristic score for being top-left on page (0..0.4 approx)."""
-    x0, y0, x1, y1 = bbox
-    w, h = page_rect.width, page_rect.height
-    score = 0.0
-    if y0 < 0.25 * h:
-        score += 0.2
-    if x0 < 0.35 * w:
-        score += 0.2
-    return score
-
-
 def whitespace_gap_above(
     page: fitz.Page, bbox: Tuple[float, float, float, float]
 ) -> float:
@@ -121,11 +107,8 @@ def _is_leader_token(txt: str) -> bool:
 class HeadingHit:
     letter: str
     page: int
-    score: float
     text: str
     bbox: Tuple[float, float, float, float]
-    source: str  # 'bookmark' | 'toc' | 'regex'
-    details: Dict[str, Any]
 
 
 @dataclass
@@ -133,10 +116,6 @@ class SectionSpan:
     section: str  # 'A'..'E'
     start_page: int
     end_page: int
-    confidence: float
-    detectors: Dict[
-        str, bool
-    ]  # {'bookmark': True/False, 'toc': True/False, 'regex': True/False}
 
 
 @dataclass
@@ -146,7 +125,6 @@ class SubsectionSpan:
     title: str
     start_page: int
     end_page: int
-    confidence: float
 
 
 @dataclass
@@ -185,56 +163,12 @@ class PDFLoader:
     def get_page(self, i: int) -> fitz.Page:
         return self.doc[i]
 
-    def get_toc(self) -> List[Tuple[int, str, int]]:
-        # [(level, title, page)]
-        try:
-            return self.doc.get_toc(simple=True) or []
-        except Exception:
-            return []
-
     def text_blocks(self, page_index: int) -> List[Dict[str, Any]]:
         page = self.get_page(page_index)
         return page.get_text("dict")["blocks"]
 
     def rect(self, page_index: int) -> fitz.Rect:
         return self.get_page(page_index).rect
-
-
-class BookmarkDetector:
-    """Extract bookmarks pointing to A..E-like titles as soft anchors."""
-
-    def __init__(self):
-        pass
-
-    @staticmethod
-    def _classify_letter(title: str) -> Optional[str]:
-        title_norm = normalize_text(title)
-        for letter, pat in SECTION_PATTERNS.items():
-            if pat.search(title_norm):
-                return letter
-        # Also accept raw "A. " starts to be generous:
-        m = re.match(r"^([A-E])\.", title_norm)
-        if m:
-            return m.group(1).upper()
-        return None
-
-    def detect(self, loader: PDFLoader) -> List[HeadingHit]:
-        hits: List[HeadingHit] = []
-        for level, title, page in loader.get_toc():
-            letter = self._classify_letter(title)
-            if letter:
-                hits.append(
-                    HeadingHit(
-                        letter=letter,
-                        page=max(1, page),  # PyMuPDF TOC pages are 1-based already
-                        score=0.55,  # modest prior
-                        text=title,
-                        bbox=(0, 0, 0, 0),
-                        source="bookmark",
-                        details={"level": level},
-                    )
-                )
-        return hits
 
 
 class ToCDetector:
@@ -565,86 +499,12 @@ class ToCDetector:
                 if not triplet:
                     continue
                 letter, title, page_num = triplet
-                # Soft score; actual on-page heading detection will verify/boost later
                 hits.append(
                     HeadingHit(
                         letter=letter,
                         page=page_num,
-                        score=0.55,
                         text=title,
                         bbox=(0, 0, 0, 0),
-                        source="toc",
-                        details={"toc_page": pi + 1, "reconstructed": True},
-                    )
-                )
-        return hits
-
-
-class RegexHeadingDetector:
-    """Scan each page for A..E headings and score them with typography & position."""
-
-    def __init__(self):
-        pass
-
-    def _candidate_spans(
-        self, page_dict: Dict[str, Any], page_rect: fitz.Rect
-    ) -> List[Tuple[str, float, bool, Tuple[float, float, float, float], str]]:
-        cands = []
-        for block in page_dict.get("blocks", []):
-            for line in block.get("lines", []):
-                for span in line.get("spans", []):
-                    raw = span.get("text", "")
-                    text = normalize_text(raw)
-                    if not text:
-                        continue
-                    # strict: only consider short-ish spans
-                    if len(text) > 120:
-                        continue
-                    # match any SECTION pattern
-                    matched_letter = None
-                    for letter, pat in SECTION_PATTERNS.items():
-                        if pat.search(text):
-                            matched_letter = letter
-                            break
-                    if not matched_letter:
-                        continue
-                    size = float(span.get("size", 0.0))
-                    bold = bool(span.get("flags", 0) & 2)
-                    bbox = tuple(span.get("bbox", (0, 0, 0, 0)))
-                    # scoring
-                    score = min(1.0, (size / 18.0))  # normalize ~14-20pt into 0..1
-                    if bold:
-                        score += 0.15
-                    score += roughly_top_left(bbox, page_rect)
-                    score += whitespace_gap_above(None, bbox)  # cheap cue
-                    cands.append((matched_letter, score, bold, bbox, text))
-        return cands
-
-    def detect(self, loader: PDFLoader) -> List[HeadingHit]:
-        hits: List[HeadingHit] = []
-        for i in range(loader.page_count()):
-            page = loader.get_page(i)
-            page_dict = page.get_text("dict")
-            page_rect = page.rect
-            cands = self._candidate_spans(page_dict, page_rect)
-            if not cands:
-                continue
-            # best per letter per page
-            best_by_letter: Dict[str, Tuple] = {}
-            for letter, score, bold, bbox, text in cands:
-                prev = best_by_letter.get(letter)
-                if (prev is None) or (score > prev[1]):
-                    best_by_letter[letter] = (letter, score, bold, bbox, text)
-            for letter, score, bold, bbox, text in best_by_letter.values():
-                hits.append(
-                    HeadingHit(
-                        letter=letter,
-                        page=i + 1,
-                        score=min(0.95, score),
-                        text=text,
-                        bbox=bbox,
-                        source="regex",
-                        details={"bold": bold, "size_score": min(1.0, score)},
                     )
                 )
         return hits
@@ -652,8 +512,8 @@ class RegexHeadingDetector:
 
 class SectionFuser:
     """
-    Fuse bookmarks/ToC/regex signals into ordered A..E sections,
-    enforce monotonic page order, and compute confidence.
+    Fuse ToC/regex signals into ordered A..E sections
+    and enforce monotonic page order
     """
 
     def __init__(self, required_letters=("A", "B", "C", "D", "E")):
@@ -668,7 +528,7 @@ class SectionFuser:
                 per_letter[h.letter].append(h)
         # keep top few per letter to allow order constraints later
         for k in per_letter.keys():
-            per_letter[k].sort(key=lambda x: (-x.score, x.page))
+            per_letter[k].sort(key=lambda x: x.page)
             per_letter[k] = per_letter[k][:5]
         return per_letter
 
@@ -689,17 +549,14 @@ class SectionFuser:
             if not candidates:
                 issues.append(f"Missing section {letter}")
                 continue
-            best = max(candidates, key=lambda h: h.score)
+            best = max(candidates, key=lambda h: h.page)
             # Demote if going backwards significantly
             if best.page < last_page:
                 best = HeadingHit(
                     best.letter,
                     last_page,
-                    best.score * 0.7,
                     best.text,
                     best.bbox,
-                    best.source,
-                    best.details,
                 )
                 issues.append(f"Adjusted {letter} start to maintain order")
             chosen[letter] = best
@@ -721,20 +578,11 @@ class SectionFuser:
                     next_page = chosen[nxt].page
                     break
             end_page = max(start_page, next_page - 1)
-            # combine detector presence per letter
-            detector_presence = {"bookmark": False, "toc": False, "regex": False}
-            for h in per_letter[letter]:
-                detector_presence[h.source] = True or detector_presence[h.source]
-            # confidence: base on chosen hit score + how many detectors fired
-            detectors_count = sum(1 for v in detector_presence.values() if v)
-            conf = min(1.0, this_hit.score + 0.1 * (detectors_count - 1))
             spans.append(
                 SectionSpan(
                     section=letter,
                     start_page=start_page,
                     end_page=end_page,
-                    confidence=conf,
-                    detectors=detector_presence,
                 )
             )
 
@@ -762,12 +610,11 @@ class SubsectionDetector:
     ) -> List[SubsectionSpan]:
         subs: List[SubsectionSpan] = []
         for sp in section_spans:
-            # Collect subsection hits as tuples: (code, title, page, confidence)
-            hits: List[Tuple[str, str, int, float]] = []
+            # Collect subsection hits as tuples: (code, title, page)
+            hits: List[Tuple[str, str, int]] = []
             for p in range(sp.start_page - 1, sp.end_page):
                 page = loader.get_page(p)
                 page_dict = page.get_text("dict")
-                page_rect = page.rect
                 for blk in page_dict.get("blocks", []):
                     for line in blk.get("lines", []):
                         txt = normalize_text(
@@ -783,13 +630,10 @@ class SubsectionDetector:
                         if letter != sp.section:
                             continue
                         code = f"{letter}.{n1}" + (f".{n2}" if n2 else "")
-                        conf = 0.6 + roughly_top_left(
-                            line["spans"][0]["bbox"], page_rect
-                        )
-                        hits.append((code, title, p + 1, min(0.95, conf)))
+                        hits.append((code, title, p + 1))
             # Deduplicate by (code, page)
             seen = set()
-            deduped_hits: List[Tuple[str, str, int, float]] = []
+            deduped_hits: List[Tuple[str, str, int]] = []
             for h in hits:
                 key = (h[0], h[2])
                 if key in seen:
@@ -800,7 +644,7 @@ class SubsectionDetector:
             deduped_hits.sort(key=lambda x: (x[2], x[0]))
             # Materialize continuous spans
             n = len(deduped_hits)
-            for i, (code, title, page, confidence) in enumerate(deduped_hits):
+            for i, (code, title, page) in enumerate(deduped_hits):
                 # Start page for this subsection
                 start_page = max(sp.start_page, page)
                 # End page: if not last, up to next subsection's page; else to section end
@@ -819,7 +663,6 @@ class SubsectionDetector:
                         title=title,
                         start_page=start_page,
                         end_page=end_page,
-                        confidence=confidence,
                     )
                 )
         return subs
@@ -842,9 +685,7 @@ class SFCRIngestor:
     def __init__(self, doc_id: str, pdf_path: str):
         self.doc_id = doc_id
         self.loader = PDFLoader(pdf_path)
-        self.bookmarks = BookmarkDetector()
         self.toc = ToCDetector(max_pages_scan=6)
-        self.regex = RegexHeadingDetector()
         self.fuser = SectionFuser()
         self.subs = SubsectionDetector()
 
@@ -889,9 +730,7 @@ class SFCRIngestor:
     def run(self) -> IngestionResult:
         # 1) Signals
         hits: List[HeadingHit] = []
-        hits += self.bookmarks.detect(self.loader)
         hits += self.toc.detect(self.loader)
-        hits += self.regex.detect(self.loader)
 
         # 2) Fuse & enforce order
         sections, issues = self.fuser.fuse(self.loader, hits)
@@ -936,21 +775,11 @@ class SFCRIngestor:
 
         if post_candidate:
             # Append synthetic trailing section Z (generic name for display)
-            detectors = {
-                "post_toc": True,
-                "post_regex": False,
-                "post_bookmark": False,
-                "bookmark": False,
-                "toc": False,
-                "regex": False,
-            }
             sections.append(
                 SectionSpan(
                     section="Z",
                     start_page=post_candidate.page,
                     end_page=self.loader.page_count(),
-                    confidence=0.8,  # ToC-derived; you can tune
-                    detectors=detectors,
                 )
             )
             if last_ae_section:

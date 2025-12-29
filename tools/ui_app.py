@@ -11,7 +11,7 @@ from sfcr.db import (
     get_extractions_for_doc,
     init_db,
     list_documents,
-    load_extractions_from_dir,
+    load_extractions_from_dir, get_summaries_for_doc, load_catalog, load_summaries_from_dir,
 )
 
 
@@ -42,57 +42,84 @@ def safe_rerun():
 
 def main():
     st.set_page_config(page_title="SFCR Extractor Viewer", layout="wide")
-    st.title("SFCR Extractor — Verified Values")
+    st.title("SFCR Viewer")
 
     cfg = get_settings()
     db_path = db_path_default()
-    colA, colB, colC = st.columns([2, 2, 1])
-
-    with colA:
-        st.caption(f"Output dir: `{cfg.output_dir}`")
-        if st.button("1) Init DB", help="Create SQLite with tables/views if missing"):
-            p = init_db(db_path)
-            st.success(f"DB initialized at {p}")
-
-    with colB:
-        if st.button("2) Load from JSONL", help="Load all *.extractions.jsonl into DB"):
-            n_docs, n_rows = load_extractions_from_dir(cfg.output_dir, db_path)
-            st.success(f"Loaded {n_rows} rows from {n_docs} docs")
-
-    with colC:
-        if st.button("↻ Refresh"):
-            safe_rerun()
 
     # Documents sidebar
     docs = list_documents(db_path)
-    doc_ids = [d["doc_id"] for d in docs]
-    st.sidebar.header("Documents")
+    display_names = [d["display_name"] for d in docs]
+    st.sidebar.header("Dokumente")
     if not docs:
         st.sidebar.warning(
-            "No documents in DB yet. Click 'Init DB' then 'Load from JSONL'."
+            "Keine Dokumente in DB gefunden. Klicke 'Init DB', dann 'Load from JSONL'."
         )
-        st.stop()
 
-    doc_id = st.sidebar.selectbox("Choose document", doc_ids, index=0)
+    display_name = st.sidebar.selectbox("Dokument auswählen", display_names, index=0)
+    doc_id = None
     pdf_path = None
     for d in docs:
-        if d["doc_id"] == doc_id:
+        if d["display_name"] == display_name:
+            doc_id = d["doc_id"]
             pdf_path = d["pdf_path"]
             break
 
     # Filters
-    st.sidebar.header("Filters")
-    show_only_failed = st.sidebar.checkbox("Only unverified / failed")
-    show_source = st.sidebar.checkbox("Show source text")
+    st.sidebar.header("Filter")
+    show_only_failed = st.sidebar.checkbox("Zeige nur unverifizierte Werte")
+    show_source = st.sidebar.checkbox("Zeige Text-Quelle")
+
+    # colA, colB, colC = st.columns([2, 2, 1])
+
+    # with colA:
+    if st.sidebar.button("1) Init DB", help="Create SQLite with tables/views if missing"):
+        p = init_db(db_path)
+        st.success(f"DB initialized at {p}")
+
+    # with colB:
+    if st.sidebar.button("2) Load from JSONL", help="Load all *.extractions.jsonl into DB"):
+        n_docs = load_catalog()
+        _, _ = load_extractions_from_dir()
+        _, _ = load_summaries_from_dir()
+        st.success(f"Loaded {n_docs} docs")
+
+    # with colC:
+    if st.sidebar.button("↻ Refresh"):
+        safe_rerun()
+
+    if not docs:
+        st.stop()
+
+    st.header(f"{display_name}")
+
+    # Summaries
+    summaries = get_summaries_for_doc(doc_id)
+
+    st.subheader("Zusammenfassungen")
+    if not summaries:
+        st.info("Keine Zusammenfassungen für das Dokument gefunden. Erzeuge neue Zusammenfassungen und lade sie in die DB.")
+    else:
+        # Build stable tab order; fall back to title
+        labels = [f"{s['section_id']} — {s.get('title') or ''}".strip(" —") for s in summaries]
+        tabs = st.tabs(labels)
+        for tab, s in zip(tabs, summaries):
+            with tab:
+                meta = f"Pages {s.get('start_page')}–{s.get('end_page')}" if s.get("start_page") and s.get(
+                    "end_page") else ""
+                if meta:
+                    st.caption(meta)
+                # The summaries are multi-line text; render as Markdown
+                st.markdown(s.get("summary") or "_(empty)_")
 
     # Table
     rows = get_extractions_for_doc(doc_id, db_path)
     if show_only_failed:
         rows = [r for r in rows if not r.get("verified")]
 
-    st.subheader(f"Results for `{doc_id}`")
+    st.subheader("Werte")
     if not rows:
-        st.info("No extractions for this document.")
+        st.info("Für das Dokument wurden keine Werte in der DB gefunden. Extrahiere zunächst die Werte und lade sie dann in die DB.")
         st.stop()
 
     # Summary chips

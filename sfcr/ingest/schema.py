@@ -10,29 +10,6 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 # -----------------------------
 SectionLetter = Literal["A", "B", "C", "D", "E", "Z"]  # Z = synthetic post-E section
 
-
-# -----------------------------
-# Helper models
-# -----------------------------
-class Detectors(BaseModel):
-    """
-    Which detectors fired for this section.
-    Using a model (extra='forbid') instead of a Dict ensures unknown keys are rejected.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    # A–E detectors
-    bookmark: bool = False
-    toc: bool = False
-    regex: bool = False
-
-    # Post-section (Z) detectors
-    post_toc: bool = False
-    post_regex: bool = False
-    post_bookmark: bool = False
-
-
 # -----------------------------
 # Core schema
 # -----------------------------
@@ -47,8 +24,6 @@ class SectionSpan(BaseModel):
     end_page: int = Field(
         ..., ge=1, description="1-based inclusive page index where section ends"
     )
-    confidence: float = Field(0.0, ge=0.0, le=1.0)
-    detectors: Detectors = Field(default_factory=Detectors)
 
     @model_validator(mode="after")
     def _page_order(self) -> "SectionSpan":
@@ -70,7 +45,6 @@ class SubsectionSpan(BaseModel):
     end_page: int = Field(
         ..., ge=1, description="1-based inclusive page index where subsection ends"
     )
-    confidence: float = Field(0.0, ge=0.0, le=1.0)
 
     @field_validator("title")
     @classmethod

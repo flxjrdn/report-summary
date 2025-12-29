@@ -22,9 +22,9 @@ class OllamaTextClient(LLMTextClient):
     model: str = "mistral"
     host: str = "http://127.0.0.1:11434"
     temperature: float = 0.0
-    num_ctx: int = 8192
+    num_ctx: int = 32768
     num_predict: int = 400
-    timeout_s: float = 30.0
+    timeout_s: float = 120.0
     max_retries: int = 1
     backoff_base_s: float = 1.2
     backoff_jitter_s: float = 0.4
@@ -139,3 +139,12 @@ class OllamaTextClient(LLMTextClient):
             )
         except Exception:
             pass
+
+
+if __name__ == "__main__":
+    textclient = OllamaTextClient(
+        # model="gpt-oss:20b"
+        model="deepseek-r1:14b"
+    )
+    out = textclient.generate_raw("Wie viele Tage hat ein Jahr?")
+    print(out)

@@ -39,6 +39,9 @@ def _approx_token_count(text: str) -> int:
 
 
 def _window_text(field: FieldDef, section_text: str, token_budget: int) -> str:
+    # TODO delete this function?
+    if len(section_text) >= 0:
+        return section_text
     if _approx_token_count(section_text) <= token_budget:
         return section_text
     lower = section_text.lower()
@@ -108,15 +111,15 @@ class OllamaLLM(LLMClient):
     ) -> ExtractionLLM:
         bounded = _window_text(field, section_text, self.input_token_limit)
         prompt = self._build_prompt(field, bounded, page_start, page_end)
-
+        print(prompt) # TODO delete
         raw = self.text_client.generate_raw(
             prompt,
             json_schema=ResponseLLM.model_json_schema(),
             options={"num_predict": self.output_max_tokens},
         )
-
+        print(f"response (#chars: {len(raw)}: {raw}) # TODO delete")
         parsed = ResponseLLM.model_validate_json(raw)
-
+        print(parsed) # TODO delete
         # Ensure a short source snippet (<=200 chars) and build a deterministic snippet hash
         src_text = (parsed.source_text or "").strip()
         if len(src_text) > 200:

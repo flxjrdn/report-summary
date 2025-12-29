@@ -33,15 +33,12 @@ def extract_directory(
     fields_yaml: Path,
     *,
     pattern: str = "*.pdf",
-    out_dir: Optional[Path] = None,
     llm=None,  # prebuilt client (Ollama or Mock)
     resume: bool = True,
     limit: Optional[int] = None,
     show_progress: bool = True,
 ) -> Tuple[int, int, float]:
     cfg = get_settings()
-    out_dir = out_dir or cfg.output_dir
-    out_dir.mkdir(parents=True, exist_ok=True)
 
     all_pdfs = list(iter_pdfs(src_dir, pattern))
     if limit is not None and limit >= 0:
@@ -53,7 +50,7 @@ def extract_directory(
     def process(pdf: Path) -> bool:
         nonlocal processed, skipped
         doc_id = pdf.stem
-        ingest_json = find_ingest_json(doc_id, out_dir)
+        ingest_json = find_ingest_json(doc_id, cfg.output_dir_ingest)
         if not ingest_json.exists():
             skipped += 1
             print(
@@ -61,7 +58,7 @@ def extract_directory(
             )
             return True
 
-        out_path = out_dir / f"{doc_id}.extractions.jsonl"
+        out_path = cfg.output_dir_extract / f"{doc_id}.extractions.jsonl"
         if resume and out_path.exists():
             skipped += 1
             print(f"[yellow]skip[/yellow] already exists: {out_path.name}")

@@ -33,9 +33,8 @@ help:
 	@echo "Available targets:"
 	@echo "  install             Install all dependencies in editable mode"
 	@echo "  test                Run unit tests with pytest"
-	@echo "  ingest              Run ingestion on sample PDFs"
-	@echo "  validate            Validate produced *.ingest.json files"
-	@echo "  schema              Regenerate ingestion JSON Schema"
+	@echo "  ingest              Run ingestion on sample PDF"
+	@echo "  ingest-dir          Run ingestion on all PDFs in folder"
 	@echo "  extract             Extract values (MODEL=$(MODEL), PROVIDER=$(PROVIDER))"
 	@echo "  extract-dir         Extract all ingested docs (MODEL=$(MODEL), PROVIDER=$(PROVIDER))"
 	@echo "  eval                Evaluate extraction results against gold CSV file"
@@ -57,13 +56,8 @@ test:
 ingest:
 	$(PYTHON) scripts/cli.py ingest
 
-validate:
-	$(PYTHON) scripts/cli.py validate-dir
-
-schema:
-	$(PYTHON) scripts/export_schema.py
-	git diff --exit-code schema/ingestion.schema.json || \
-	(echo "Schema changed — bump schema_version and update examples." && exit 1)
+ingest-dir:
+	$(PYTHON) scripts/cli.py ingest-dir
 
 extract:
 	$(PYTHON) scripts/cli.py extract $(PDF) --provider $(PROVIDER) --model $(MODEL)
@@ -98,4 +92,4 @@ clean:
 	rm -rf __pycache__ .pytest_cache artifacts/ingest/*.json artifacts/*.json
 
 # These targets do not refer to files - always run them
-.PHONY: help install test ingest validate schema extract extract-dir eval gold summarize summarize-dir ui db-init db-load clean
+.PHONY: help install test ingest ingest-dir extract extract-dir eval gold summarize summarize-dir ui db-init db-load clean

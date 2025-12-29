@@ -9,9 +9,6 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     """
     Central configuration for paths & files.
-    Environment overrides (examples):
-      SFCR_DATA=/path/to/pdfs
-      SFCR_OUTPUT=/tmp/out
     """
 
     model_config = SettingsConfigDict(
@@ -23,15 +20,15 @@ class Settings(BaseSettings):
         default_factory=lambda: Path(__file__).resolve().parents[1]
     )
 
-    data_dir: Path = Field(default=Path("data") / "samples", env="SFCR_DATA")
+    data_dir: Path = Field(default=Path("data"))
+    pdfs_dir: Path = Field(default=Path("data") / "sfcrs", env="SFCR_DATA")
     output_dir: Path = Field(default=Path("artifacts"), env="SFCR_OUTPUT")
-    schema_file: Path = Field(default=Path("schema") / "ingestion.schema.json")
 
-    @field_validator("data_dir", "output_dir", "schema_file", mode="after")
+    @field_validator("data_dir", "pdfs_dir", "output_dir", mode="after")
     def _expanduser(cls, v: Path) -> Path:
         return v.expanduser()
 
-    @field_validator("data_dir", "output_dir", "schema_file", mode="before")
+    @field_validator("data_dir", "pdfs_dir", "output_dir", mode="before")
     @classmethod
     def _coerce_path(cls, v):
         # Accept strings from env and coerce; allow Path passthrough.
@@ -66,12 +63,12 @@ class Settings(BaseSettings):
 
     def model_post_init(self, __context) -> None:
         # Resolve relative paths against project_root
-        if not self.data_dir.is_absolute():
+        if not self.data_dir:
             self.data_dir = (self.project_root / self.data_dir).resolve()
+        if not self.pdfs_dir.is_absolute():
+            self.pdfs_dir = (self.project_root / self.pdfs_dir).resolve()
         if not self.output_dir.is_absolute():
             self.output_dir = (self.project_root / self.output_dir).resolve()
-        if not self.schema_file.is_absolute():
-            self.schema_file = (self.project_root / self.schema_file).resolve()
 
         # Ensure output dir exists
         self.output_dir.mkdir(parents=True, exist_ok=True)

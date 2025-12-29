@@ -80,8 +80,6 @@ def test_subsections_within_bounds_and_continuous():
         section="A",
         start_page=5,
         end_page=12,
-        confidence=0.9,
-        detectors={"bookmark": False, "toc": False, "regex": False},
     )
 
     subs = detector.detect(loader, [section])
@@ -134,8 +132,6 @@ def test_subsections_clipped_to_section_and_ignore_mismatched_letters():
         section="A",
         start_page=4,
         end_page=6,
-        confidence=0.9,
-        detectors={"bookmark": False, "toc": False, "regex": False},
     )
 
     subs = detector.detect(loader, [section])
