@@ -8,8 +8,8 @@ from pathlib import Path
 import typer
 from rich import print
 
-from sfcr.db import init_db as db_init, load_catalog
-from sfcr.db import load_extractions_from_dir, load_summaries_from_dir
+from sfcr.db import init_db as db_init
+from sfcr.db import load_catalog, load_extractions_from_dir, load_summaries_from_dir
 from sfcr.eval.eval import evaluate, format_report, load_gold, load_preds
 from sfcr.eval.goldgen import generate_gold
 from sfcr.extract.batch import extract_directory
@@ -36,8 +36,8 @@ def _sha256(p: Path) -> str:
 def ingest(
     doc_id: str,
     outdir: Path = typer.Option(
-            None, "--outdir", help="Output dir; defaults to SFCR_OUTPUT or repo default"
-        ),
+        None, "--outdir", help="Output dir; defaults to SFCR_OUTPUT or repo default"
+    ),
 ):
     if doc_id is None:
         raise ValueError(f"{doc_id} is required when calling ingest for a single file")
@@ -49,6 +49,7 @@ def ingest(
             f"the specified doc_id has to refer to an existing PDF: {pdf_path}, but this file does not exist"
         )
     ingest_dir(src=pdf_path, outdir=outdir)
+
 
 @app.command()
 def ingest_dir(
@@ -310,11 +311,17 @@ def summarize(
 
 @app.command("summarize-dir")
 def summarize_dir(
-    src: Path = typer.Argument(None, help="Directory containing *.ingest.json; defaults to SFCR_OUTPUT/ingest"),
-    provider: str = typer.Option("mock", help="LLM provider (e.g., 'ollama' or 'mock')"),
+    src: Path = typer.Argument(
+        None, help="Directory containing *.ingest.json; defaults to SFCR_OUTPUT/ingest"
+    ),
+    provider: str = typer.Option(
+        "mock", help="LLM provider (e.g., 'ollama' or 'mock')"
+    ),
     model: str = typer.Option("mock", help="Model name for provider (e.g., 'mistral')"),
-    pattern: str = typer.Option("*.ingest.json", help="Glob pattern for ingestion JSONs"),
-    resume: bool = typer.Option(True, help="Skip docs with existing summaries"),
+    pattern: str = typer.Option(
+        "*.ingest.json", help="Glob pattern for ingestion JSONs"
+    ),
+    skip_existing: bool = typer.Option(True, help="Skip docs with existing summaries"),
     limit: int = typer.Option(-1, help="Process at most N docs; -1 = no limit"),
 ):
     cfg = get_settings()
@@ -328,16 +335,14 @@ def summarize_dir(
     for f in files:
         doc_id = f.name.replace(".ingest.json", "")
         out_path = Path(cfg.output_dir_summaries) / f"{doc_id}.summaries.jsonl"
-        if resume and out_path.exists():
+        if skip_existing and out_path.exists():
             skipped += 1
             continue
         pdf = Path(cfg.pdfs_dir) / f"{doc_id}.pdf"
         if not pdf.exists():
-            pdf = next(Path(cfg.pdfs_dir).rglob(f"{doc_id}.pdf"), None)
-            if pdf is None:
-                typer.secho(f"Warning: PDF not found for {doc_id}, skipping", fg="yellow")
-                skipped += 1
-                continue
+            typer.secho(f"Warning: PDF not found for {doc_id}, skipping", fg="yellow")
+            skipped += 1
+            continue
         out_path.parent.mkdir(parents=True, exist_ok=True)
 
         run_summarize(
@@ -351,7 +356,10 @@ def summarize_dir(
         processed += 1
         if limit >= 0 and processed >= limit:
             break
-    print(f"[green]✓[/green] Summarize-dir done. Processed: {processed}  Skipped: {skipped}")
+    print(
+        f"[green]✓[/green] Summarize-dir done. Processed: {processed}  Skipped: {skipped}"
+    )
+
 
 @app.command("db-init")
 def db_init_cmd():

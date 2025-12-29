@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 # -----------------------------
 SectionLetter = Literal["A", "B", "C", "D", "E", "Z"]  # Z = synthetic post-E section
 
+
 # -----------------------------
 # Core schema
 # -----------------------------

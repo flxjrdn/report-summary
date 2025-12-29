@@ -39,6 +39,7 @@ def _read_ingestion_sections(ingest_json: Path) -> List[Section]:
     # Keep A..E in order; POST at the end if present
     order = {"A": 0, "B": 1, "C": 2, "D": 3, "E": 4}
     sections.sort(key=lambda s: (order.get(s.section_id, 99), s.start_page))
+    print(f"Reading ingestion sections complete... found {len(sections)} sections")
     return sections
 
 
@@ -77,35 +78,35 @@ def _chunk_text(s: str, max_chars: int = 12000, overlap: int = 800) -> List[str]
 
 
 _SUMMARY_SYSTEM_INSTR = (
-    "You summarize Solvency II SFCR sections for actuaries. "
-    "Write 3–6 concise bullet points, factual and neutral. "
-    "Include material quantitative values (with units) and any notable changes vs prior year, "
-    "but do not invent numbers. If the section is largely qualitative, focus on key themes. "
-    "Avoid boilerplate; avoid copying sentences verbatim."
+    "Du fasst Abschnitte eines Solvency-II-SFCR für Aktuare zusammen."
+    "Erstelle 3–6 prägnante, sachliche und neutrale Stichpunkte."
+    "Nenne alle wesentlichen quantitativen Werte (mit Einheiten) sowie relevante Veränderungen gegenüber dem Vorjahr – ohne Zahlen zu erfinden."
+    "Bei überwiegend qualitativen Abschnitten konzentriere dich auf die zentralen Inhalte und Themen."
+    "Vermeide Standardformulierungen und kopiere keine Sätze wörtlich aus dem Ausgangstext."
 )
 
 
 def _section_prompt(section: Section) -> str:
     return (
         f"{_SUMMARY_SYSTEM_INSTR}\n\n"
-        # f"Section: {section.section_id} — {section.title}\n" # TODO include title
-        f"Section: {section.section_id}\n"
-        f"Instructions:\n"
-        f"- Summarize only the content provided.\n"
-        f"- Prefer short bullet points (• ...).\n"
-        f"- If the input is empty or not informative, respond with 'No material content found.'\n"
-        f"\n--- BEGIN SECTION TEXT ---\n"
+        # f"Abschnitt: {section.section_id} — {section.title}\n" # TODO include title
+        f"Abschnitt: {section.section_id}\n"
+        f"Anweisungen:\n"
+        f"- Fasse nur den gegebenen Kontext zusammen.\n"
+        f"- Bevorzuge kurze bullet points (• ...).\n"
+        f"- Wenn die Eingabe leer ist oder keine relevanten Informationen enthält, antworte mit 'Keine relevanten Inhalte gefunden.'\n"
+        f"\n--- BEGINN ABSCHNITT TEXT ---\n"
         f"{{chunk}}\n"
-        f"--- END SECTION TEXT ---\n"
+        f"--- ENDE ABSCHNITT TEXT ---\n"
     )
 
 
 def _synthesis_prompt() -> str:
     return (
-        "You are given multiple partial summaries of the same SFCR section. "
-        "Merge them into 3–6 bullets, removing duplication, keeping the most precise numbers. "
-        "Do not add information not present in the partial summaries.\n\n"
-        "Partial summaries:\n"
+        "Du erhältst mehrere Teilzusammenfassungen desselben SFCR-Abschnitts."
+        "Fasse sie zu 3–6 Stichpunkten zusammen, entferne Duplikate und übernimm jeweils die präzisesten Zahlenangaben."
+        "Füge keinerlei Informationen hinzu, die nicht in den Teilsummaries enthalten sind."
+        "Teilzusammenfassungen:"
         "{bullets}"
     )
 
@@ -123,9 +124,10 @@ def summarize_section(
     overlap: int = 800,
 ) -> str:
     """Chunk → summarize each chunk → synthesize (if needed). Returns final bullet list as text."""
+    print(f"summarizing section {section.section_id} ...")
     text = _extract_text_for_pages(pdf, section.start_page, section.end_page)
     if not text.strip():
-        return "No material content found."
+        return "Keine relevanten Inhalte gefunden."
 
     chunks = _chunk_text(text, max_chars=max_chars_per_chunk, overlap=overlap)
 
@@ -179,3 +181,20 @@ def run_summarize(
     sections = _read_ingestion_sections(ingest_json)
     write_summaries_jsonl(out_jsonl, doc_id, sections, pdf_path, llm)
     return out_jsonl
+
+
+if __name__ == "__main__":
+    run_summarize(
+        doc_id="allianz-pkv_2024",
+        pdf_path=Path(
+            "/Users/felixjordan/Documents/code/report-summary/data/sfcrs/allianz-pkv_2024.pdf"
+        ),
+        ingest_json=Path(
+            "/Users/felixjordan/Documents/code/report-summary/artifacts/ingest/allianz-pkv_2024.ingest.json"
+        ),
+        out_jsonl=Path(
+            "/Users/felixjordan/Documents/code/report-summary/artifacts/summaries/allianz-pkv_2024.summaries.jsonl"
+        ),
+        provider="openai",
+        model="gtp-5-nano",
+    )

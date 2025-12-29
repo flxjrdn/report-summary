@@ -3,7 +3,6 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
-import os.path
 import sqlite3
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -105,7 +104,9 @@ def _find_pdf_for_doc(doc_id: str) -> Optional[Path]:
     return cand if cand.exists() else None
 
 
-def load_catalog(csv_path: Optional[Path] = None, db_path: Optional[Path] = None) -> int:
+def load_catalog(
+    csv_path: Optional[Path] = None, db_path: Optional[Path] = None
+) -> int:
     """
     Upsert rows from a small catalog CSV into the `documents` table.
 
@@ -121,7 +122,7 @@ def load_catalog(csv_path: Optional[Path] = None, db_path: Optional[Path] = None
     n = 0
 
     cfg = get_settings()
-    catalog_path = csv_path or cfg.data_dir / f"catalog.csv"
+    catalog_path = csv_path or cfg.data_dir / "catalog.csv"
 
     with Path(catalog_path).open("r", encoding="utf-8") as fh:
         reader = csv.DictReader(fh)
@@ -173,7 +174,7 @@ def load_catalog(csv_path: Optional[Path] = None, db_path: Optional[Path] = None
                   company      = COALESCE(excluded.company, documents.company),
                   display_name = COALESCE(excluded.display_name, documents.display_name),
                   sha256       = COALESCE(excluded.sha256, documents.sha256),
-                  page_count   = COALESCE(excluded.page_count, documents.page_count), 
+                  page_count   = COALESCE(excluded.page_count, documents.page_count),
                   updated_at   = datetime('now');
                 """,
                 (doc_id, str(pdf_path), year, company, display_name, sha, pages),
@@ -307,7 +308,7 @@ def load_summaries_from_dir(
 
 
 def list_documents(db_path: Optional[Path] = None) -> List[Dict[str, Any]]:
-    if not db_path.is_file():
+    if db_path is None or not db_path.is_file():
         return []
     con = connect(db_path)
     cur = con.cursor()
