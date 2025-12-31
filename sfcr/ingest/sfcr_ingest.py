@@ -56,6 +56,11 @@ RIGHT_TOKEN_RE = re.compile(
     re.VERBOSE,
 )
 LEFT_TOPLEVEL_RE = re.compile(r"^([A-E])\.$", re.I)  # e.g., "A."
+
+# Matches "A.1" or "A.12" or "B.2.1" (optionally without trailing title)
+LEFT_SUBSECTION_FULL_RE = re.compile(
+    r"^(?P<section>[A-E])\.(?P<n1>\d{1,2})(?:\.(?P<n2>\d{1,2}))?$", re.I
+)
 LEFT_SUBSECTION_RE = re.compile(r"^([A-E])\.\d", re.I)  # e.g., "A.1", "B.12"
 LEADER_CHARS = (
     r"\.\u2026\u00B7\u2219\u22EF\u2024\u2027\uf020·•⋯∙"  # dot leader variants
@@ -76,19 +81,6 @@ def normalize_text(s: str) -> str:
     # strip double spaces
     s = re.sub(r"\s+", " ", s).strip()
     return s
-
-
-def whitespace_gap_above(
-    page: fitz.Page, bbox: Tuple[float, float, float, float]
-) -> float:
-    """
-    Crude whitespace signal: larger gap above top of bbox => more likely to be a section heading.
-    Returns 0..0.2.
-    """
-    x0, y0, x1, y1 = bbox
-    # crude: distance to nearest span above within 40px vertical radius
-    # We use page text (raw) to estimate; keep it cheap
-    return 0.1 if y0 < 120 else 0.0  # simple but effective; tune later
 
 
 def _is_leader_token(txt: str) -> bool:
@@ -600,71 +592,114 @@ class SectionFuser:
 
 
 class SubsectionDetector:
-    """Detect A.1 / B.2 style subsections within each section's page range."""
+    """
+    Detect subsections using the Table of Contents, analogous to sections.
+    Uses TocItem.left_marker (e.g., "A.1", "B.12", "C.2.1") and TocItem.page.
+
+    Produces SubsectionSpan with continuous spans bounded to the parent section.
+    """
 
     def __init__(self):
         pass
 
+    @staticmethod
+    def _section_map(section_spans: List[SectionSpan]) -> Dict[str, SectionSpan]:
+        return {sp.section.upper(): sp for sp in section_spans}
+
+    @staticmethod
+    def _parse_sub_marker(left_marker: str) -> Optional[str]:
+        """
+        Returns normalized code like 'A.1' or 'B.2.1' if left_marker is a subsection marker.
+        Otherwise returns None.
+        """
+        if not left_marker:
+            return None
+        m = LEFT_SUBSECTION_FULL_RE.match(left_marker.strip())
+        if not m:
+            return None
+        sec = m.group("section").upper()
+        n1 = m.group("n1")
+        n2 = m.group("n2")
+        return f"{sec}.{n1}" + (f".{n2}" if n2 else "")
+
     def detect(
-        self, loader: PDFLoader, section_spans: List[SectionSpan]
+        self,
+        toc_items: List[TocItem],
+        section_spans: List[SectionSpan],
+        page_count: int,
     ) -> List[SubsectionSpan]:
+        """
+        Build subsection spans from toc items, bounded within each section.
+        """
+        sec_map = self._section_map(section_spans)
+
+        # Collect subsection hits: (section, code, title, page)
+        hits: List[Tuple[str, str, str, int]] = []
+        for it in toc_items:
+            code = self._parse_sub_marker(it.left_marker)
+            if not code:
+                continue
+            sec = code.split(".")[0].upper()
+            if sec not in sec_map:
+                continue
+            # Only accept subsection pages within section bounds
+            parent = sec_map[sec]
+            if it.page < parent.start_page or it.page > parent.end_page:
+                continue
+            hits.append((sec, code, it.title, it.page))
+
+        # De-dupe by (code, page)
+        seen = set()
+        dedup: List[Tuple[str, str, str, int]] = []
+        for h in hits:
+            key = (h[1], h[3])
+            if key in seen:
+                continue
+            seen.add(key)
+            dedup.append(h)
+
+        # Sort within each section by page then code
+        dedup.sort(key=lambda x: (x[0], x[3], x[1]))
+
+        # Build spans per section
         subs: List[SubsectionSpan] = []
-        for sp in section_spans:
-            # Collect subsection hits as tuples: (code, title, page)
-            hits: List[Tuple[str, str, int]] = []
-            for p in range(sp.start_page - 1, sp.end_page):
-                page = loader.get_page(p)
-                page_dict = page.get_text("dict")
-                for blk in page_dict.get("blocks", []):
-                    for line in blk.get("lines", []):
-                        txt = normalize_text(
-                            "".join([s["text"] for s in line.get("spans", [])])
-                        )
-                        if not txt:
-                            continue
-                        m = SUBSECTION_PATTERN.match(txt)
-                        if not m:
-                            continue
-                        letter, n1, n2, title = m.groups()
-                        letter = letter.upper()
-                        if letter != sp.section:
-                            continue
-                        code = f"{letter}.{n1}" + (f".{n2}" if n2 else "")
-                        hits.append((code, title, p + 1))
-            # Deduplicate by (code, page)
-            seen = set()
-            deduped_hits: List[Tuple[str, str, int]] = []
-            for h in hits:
-                key = (h[0], h[2])
-                if key in seen:
-                    continue
-                seen.add(key)
-                deduped_hits.append(h)
-            # Sort by page, then code for stability
-            deduped_hits.sort(key=lambda x: (x[2], x[0]))
-            # Materialize continuous spans
-            n = len(deduped_hits)
-            for i, (code, title, page) in enumerate(deduped_hits):
-                # Start page for this subsection
-                start_page = max(sp.start_page, page)
-                # End page: if not last, up to next subsection's page; else to section end
-                if i + 1 < n:
-                    next_page = deduped_hits[i + 1][2]
-                    end_page = min(sp.end_page, next_page)
+        i = 0
+        while i < len(dedup):
+            sec = dedup[i][0]
+            parent = sec_map[sec]
+            # gather all subsection entries for this section
+            j = i
+            group: List[Tuple[str, str, str, int]] = []
+            while j < len(dedup) and dedup[j][0] == sec:
+                group.append(dedup[j])
+                j += 1
+
+            # materialize spans: start = entry page, end = next entry page (or section end)
+            for k, (_, code, title, start_page_raw) in enumerate(group):
+                start_page = max(parent.start_page, start_page_raw)
+
+                if k + 1 < len(group):
+                    next_page_raw = group[k + 1][3]
+                    # continuous spans allowed; end may equal next start
+                    end_page = min(parent.end_page, next_page_raw)
                 else:
-                    end_page = sp.end_page
-                # Allow end_page equal to start_page
+                    end_page = parent.end_page
+
                 if start_page > end_page:
                     continue
+
                 subs.append(
                     SubsectionSpan(
-                        section=sp.section,
+                        section=sec,
                         code=code,
                         title=title,
                         start_page=start_page,
                         end_page=end_page,
                     )
                 )
+
+            i = j
+
         return subs
 
 
@@ -689,44 +724,6 @@ class SFCRIngestor:
         self.fuser = SectionFuser()
         self.subs = SubsectionDetector()
 
-    def _possible_header_footer_lines(self) -> Tuple[set, set]:
-        """
-        Identify frequent header/footer lines to ignore if you later expand heuristics.
-        Currently not used to filter headings (kept simple), but returned for diagnostics.
-        """
-        top_lines: Dict[str, int] = {}
-        bot_lines: Dict[str, int] = {}
-        n = self.loader.page_count()
-        for i in range(n):
-            page = self.loader.get_page(i)
-            blocks = page.get_text("blocks")  # plain text blocks
-            if not blocks:
-                continue
-            # top-most and bottom-most line heuristics
-            tops = [b for b in blocks if b[1] < 60]  # y0
-            bots = [
-                b for b in blocks if (page.rect.height - b[3]) < 60
-            ]  # page height - y1
-            if tops:
-                tline = normalize_text(tops[0][4])
-                if tline:
-                    top_lines[tline] = top_lines.get(tline, 0) + 1
-            if bots:
-                bline = normalize_text(bots[-1][4])
-                if bline:
-                    bot_lines[bline] = bot_lines.get(bline, 0) + 1
-        tops_keep = {
-            k
-            for k, v in top_lines.items()
-            if v / max(1, n) > HEADER_FOOTER_FREQ_THRESHOLD
-        }
-        bots_keep = {
-            k
-            for k, v in bot_lines.items()
-            if v / max(1, n) > HEADER_FOOTER_FREQ_THRESHOLD
-        }
-        return tops_keep, bots_keep
-
     def run(self) -> IngestionResult:
         # 1) Signals
         hits: List[HeadingHit] = []
@@ -735,8 +732,13 @@ class SFCRIngestor:
         # 2) Fuse & enforce order
         sections, issues = self.fuser.fuse(self.loader, hits)
 
-        # 3) Subsections
-        subsections = self.subs.detect(self.loader, sections)
+        # 3) Subsections via ToC
+        toc_items = self.toc.detect_items(self.loader)
+        subsections = self.subs.detect(
+            toc_items=toc_items,
+            section_spans=sections,
+            page_count=self.loader.page_count(),
+        )
 
         # Find E's start page (or the latest section’s end if E is missing)
         last_ae_start = 0
@@ -745,9 +747,6 @@ class SFCRIngestor:
             if sp.section in ("A", "B", "C", "D", "E"):
                 last_ae_start = max(last_ae_start, sp.start_page)
                 last_ae_section = sp
-
-        # Pull generic ToC items
-        toc_items = self.toc.detect_items(self.loader)
 
         def is_e_subsection(left_marker: str) -> bool:
             # things like "E.1", "E.2.3", or "Abschnitt E" (treat as under E)
@@ -758,6 +757,8 @@ class SFCRIngestor:
             if re.match(r"^Abschnitt\s*E\b", left_marker, re.I):
                 return True
             if re.match(r"^Teil\s*E\b", left_marker, re.I):
+                return True
+            if re.match(r"^Kapitel\s*E\b", left_marker, re.I):
                 return True
             # Pure "E." is the section itself (already handled), not a subsection
             return False
