@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -8,9 +9,10 @@ from typing import List, Optional, Tuple
 import fitz  # PyMuPDF
 import yaml
 
-from sfcr.extract.schema import Evidence, ExtractionLLM, VerifiedExtraction
+from sfcr.extract.schema import Evidence, ExtractionLLM, ResponseLLM, VerifiedExtraction
 from sfcr.extract.verify import verify_extraction
 from sfcr.ingest.schema import IngestionResult
+from sfcr.llm.llm_text_client import LLMTextClient
 from sfcr.utils.textnorm import normalize_hyphenation
 
 # ---------- field taxonomy ----------
@@ -120,78 +122,97 @@ def harvest_scale_tokens(page_texts: List[str]) -> List[Tuple[str, str]]:
     return tokens
 
 
-# ---------- LLM interface ----------
+def _mk_snippet_hash(*parts: object, length: int = 16) -> str:
+    basis = " | ".join(str(p) for p in parts if p is not None and str(p).strip())
+    if not basis:
+        basis = "empty"
+    return hashlib.sha1(basis.encode("utf-8")).hexdigest()[:length]
 
 
-class LLMClient:
+@dataclass
+class LLMExtractor:
     """
-    Interface: implement .extract(field, section_text, pages) -> ExtractionLLM
-    Must return strict JSON-compatible fields per ExtractionLLM schema.
+    Orchestrates extraction for ANY provider/model by calling a text client.
+
+    - builds prompt
+    - calls text_client.generate_raw(...)
+    - parses ResponseLLM JSON
+    - returns ExtractionLLM with deterministic evidence snippet_hash
     """
+
+    text_client: LLMTextClient
+    output_max_tokens: int = 400  # used by Ollama; OpenAI ignores in options
 
     def extract(
         self, field: FieldDef, section_text: str, page_start: int, page_end: int
     ) -> ExtractionLLM:
-        raise NotImplementedError
+        prompt = self._build_prompt(field, section_text, page_start, page_end)
 
-
-class MockLLM(LLMClient):
-    """
-    Rule-based placeholder so you can run end-to-end now.
-    Looks for the first number after a keyword; guesses scale from keywords.
-    """
-
-    import re as _re
-
-    def extract(
-        self, field: FieldDef, section_text: str, page_start: int, page_end: int
-    ) -> ExtractionLLM:
-        text = section_text
-        # cheap locate: find window around first keyword
-        pos = min(
-            (
-                text.lower().find(k.lower())
-                for k in field.keywords
-                if text.lower().find(k.lower()) >= 0
-            ),
-            default=-1,
+        raw = self.text_client.generate_raw(
+            prompt,
+            json_schema=ResponseLLM.model_json_schema(),
+            options={"num_predict": self.output_max_tokens},
         )
-        window = text[max(0, pos - 200) : pos + 400] if pos >= 0 else text[:600]
-        # very naive number regex (DE): 123.456,78 or 123.456 or 123,4%
-        m = self._re.search(
-            r"(\(?\d{1,3}(?:\.\d{3})+(?:,\d+)?\)?%?)|(\(?\d+(?:,\d+)?\)?%?)", window
-        )
-        if not m:
-            return ExtractionLLM(
-                field_id=field.id, status="not_found", evidence=[], source_text=None
-            )
-        snip = m.group(0)
-        # guess unit & scale source
-        unit = field.unit
-        guess_scale = None
-        scale_source = "model_guess"
-        if any(x in window for x in ("TEUR", "Tsd", "Tausend")):
-            guess_scale = 1e3
-            scale_source = "nearby"
-        elif any(x in window for x in ("Mio", "Million")):
-            guess_scale = 1e6
-            scale_source = "nearby"
-        elif any(x in window for x in ("Mrd", "Milliarde")):
-            guess_scale = 1e9
-            scale_source = "nearby"
+
+        parsed = ResponseLLM.model_validate_json(raw)
+
+        src_text = (parsed.source_text or "").strip()
+        if len(src_text) > 200:
+            src_text = src_text[:197] + "..."
+
+        sh = _mk_snippet_hash(src_text, field.id, page_start)
 
         return ExtractionLLM(
             field_id=field.id,
-            status="ok",
-            value_unscaled=None,
-            value_scaled=None,
-            unit=unit,
-            scale=guess_scale,
-            evidence=[Evidence(page=page_start, ref=None)],
-            source_text=snip,
-            scale_source=scale_source,
-            notes=None,
+            status=parsed.status,
+            value_unscaled=parsed.value_unscaled,
+            value_scaled=parsed.value_scaled,
+            unit=parsed.unit,
+            scale=parsed.scale,
+            evidence=[Evidence(page=page_start, ref=None, snippet_hash=sh)],
+            source_text=src_text or None,
+            scale_source=parsed.scale_source,
+            notes=parsed.notes,
         )
+
+    def _build_prompt(
+        self, field: FieldDef, text: str, page_start: int, page_end: int
+    ) -> str:
+        field_keywords = " bzw. ".join((field.keywords or []))
+        return f"""
+You are an information extraction engine for German SFCR sections.
+
+Task:
+Extract exactly one value for the field below from the provided section snippet.
+If the value is not uniquely and explicitly present, set status "not_found" or "ambiguous" and leave numeric fields null.
+
+Field:
+- field_id: {field.id}
+- expected_unit: {field.unit}
+- page_range: {page_start}-{page_end}
+- helpful_keywords: {field_keywords}
+
+Return ONLY a single JSON object with the following keys:
+- status (string) -> "ok" | "not_found" | "ambiguous"
+- value_unscaled (number|null)
+- value_scaled (number|null)
+- scale (number|null)
+- unit ("EUR"|"%"|null)
+- source_text (string|null)  # <=200 chars around the number
+- scale_source ("row"|"column"|"caption"|"nearby"|"model_guess"|null)
+- notes (string|null)
+
+Rules:
+- Parse numbers in German locale (thousands separators may be '.', spaces, NBSP).
+- If a value is followed by a previous-year value in parentheses like "123 456 (133 333) TEUR",
+  return the FIRST value (current year).
+- Output ONLY JSON. No extra text.
+
+Section text:
+---
+{text}
+---
+""".strip()
 
 
 # ---------- Orchestration ----------
@@ -211,13 +232,11 @@ def extract_for_document(
     pdf_path: Path,
     ingestion_json: Path,
     fields_yaml: Path,
-    llm: Optional[LLMClient] = None,
+    extractor: LLMExtractor,
 ) -> List[VerifiedExtraction]:
     """f
     Run extraction + verification for a single document.
     """
-    if llm is None:
-        llm = MockLLM()
 
     ingestion = IngestionResult(
         **json.loads(ingestion_json.read_text(encoding="utf-8"))
@@ -260,7 +279,7 @@ def extract_for_document(
             [normalize_hyphenation(page_text) for page_text in page_texts],
         )
         # LLM pass
-        llm_out = llm.extract(f, section_text, start, end)
+        llm_out = extractor.extract(f, section_text, start, end)
         print(llm_out.value_scaled)  # TODO delete
         # context scale tokens (caption > column > nearby)
         tokens = harvest_scale_tokens(page_texts)

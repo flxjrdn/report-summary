@@ -13,7 +13,7 @@ from rich.progress import (
 )
 
 from sfcr.config import get_settings
-from sfcr.extract.extractor import extract_for_document, write_jsonl
+from sfcr.extract.extractor import LLMExtractor, extract_for_document, write_jsonl
 
 
 def iter_pdfs(root: Path, pattern: str = "*.pdf") -> Iterable[Path]:
@@ -24,20 +24,16 @@ def find_ingest_json(stem: str, out_dir: Path) -> Path:
     return out_dir / f"{stem}.ingest.json"
 
 
-def _get_spent_usd(llm) -> float:
-    return float(getattr(llm, "spent_usd", 0.0))  # Ollama client has none → 0.0
-
-
 def extract_directory(
     src_dir: Path,
     fields_yaml: Path,
+    extractor: LLMExtractor,
     *,
     pattern: str = "*.pdf",
-    llm=None,  # prebuilt client (Ollama or Mock)
     resume: bool = True,
     limit: Optional[int] = None,
     show_progress: bool = True,
-) -> Tuple[int, int, float]:
+) -> Tuple[int, int]:
     cfg = get_settings()
 
     all_pdfs = list(iter_pdfs(src_dir, pattern))
@@ -69,12 +65,12 @@ def extract_directory(
             pdf_path=pdf,
             ingestion_json=ingest_json,
             fields_yaml=fields_yaml,
-            llm=llm,
+            extractor=extractor,
         )
         write_jsonl(rows, out_path)
         processed += 1
         print(
-            f"[green]✓[/green] {pdf.name} → {out_path.name}  (spent≈${_get_spent_usd(llm):.4f})"
+            f"[green]✓[/green] {pdf.name} → {out_path.name}"
         )
         return True
 
@@ -97,4 +93,4 @@ def extract_directory(
             if not process(pdf):
                 break
 
-    return processed, skipped, _get_spent_usd(llm)
+    return processed, skipped

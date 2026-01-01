@@ -13,8 +13,8 @@ from sfcr.db import load_catalog, load_extractions_from_dir, load_summaries_from
 from sfcr.eval.eval import evaluate, format_report, load_gold, load_preds
 from sfcr.eval.goldgen import generate_gold
 from sfcr.extract.batch import extract_directory
-from sfcr.extract.extractor import extract_for_document, write_jsonl
-from sfcr.extract.llm_client_factory import create_llm_client
+from sfcr.extract.extractor import LLMExtractor, extract_for_document, write_jsonl
+from sfcr.llm.llm_text_client_factory import create_llm_text_client
 from sfcr.summarize.summarize import run_summarize
 
 # If not installed in editable mode, add repo root to PYTHONPATH
@@ -153,8 +153,9 @@ def extract(
     if out is None:
         out = Path(cfg.output_dir_extract) / f"{doc_id}.extractions.jsonl"
 
-    llm = create_llm_client(provider, model=model)
-    rows = extract_for_document(doc_id, pdf, ingest_json, fields, llm=llm)
+    llm = create_llm_text_client(provider, model=model)
+    extractor = LLMExtractor(text_client=llm)
+    rows = extract_for_document(doc_id, pdf, ingest_json, fields, extractor=extractor)
     write_jsonl(rows, out)
     print(f"[green]✓[/green] wrote {out}")
 
@@ -185,13 +186,14 @@ def extract_dir(
         typer.secho(f"fields.yaml not found: {fields}", fg="red")
         raise typer.Exit(1)
 
-    llm = create_llm_client(provider, model=model)
+    llm = create_llm_text_client(provider, model=model)
+    extractor = LLMExtractor(text_client=llm)
 
-    processed, skipped, _ = extract_directory(
+    processed, skipped = extract_directory(
         src_dir=src_dir,
         fields_yaml=fields,
         pattern=pattern,
-        llm=llm,  # reuse same client across PDFs
+        extractor=extractor,
         resume=resume,
         limit=None if limit is None or limit < 0 else int(limit),
         show_progress=not no_progress,

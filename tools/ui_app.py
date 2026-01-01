@@ -5,13 +5,15 @@ from typing import Optional
 
 import streamlit as st
 
-from sfcr.config import get_settings
 from sfcr.db import (
     db_path_default,
     get_extractions_for_doc,
+    get_summaries_for_doc,
     init_db,
     list_documents,
-    load_extractions_from_dir, get_summaries_for_doc, load_catalog, load_summaries_from_dir,
+    load_catalog,
+    load_extractions_from_dir,
+    load_summaries_from_dir,
 )
 
 
@@ -44,7 +46,6 @@ def main():
     st.set_page_config(page_title="SFCR Extractor Viewer", layout="wide")
     st.title("SFCR Viewer")
 
-    cfg = get_settings()
     db_path = db_path_default()
 
     # Documents sidebar
@@ -73,12 +74,16 @@ def main():
     # colA, colB, colC = st.columns([2, 2, 1])
 
     # with colA:
-    if st.sidebar.button("1) Init DB", help="Create SQLite with tables/views if missing"):
+    if st.sidebar.button(
+        "1) Init DB", help="Create SQLite with tables/views if missing"
+    ):
         p = init_db(db_path)
         st.success(f"DB initialized at {p}")
 
     # with colB:
-    if st.sidebar.button("2) Load from JSONL", help="Load all *.extractions.jsonl into DB"):
+    if st.sidebar.button(
+        "2) Load from JSONL", help="Load all *.extractions.jsonl into DB"
+    ):
         n_docs = load_catalog()
         _, _ = load_extractions_from_dir()
         _, _ = load_summaries_from_dir()
@@ -98,15 +103,22 @@ def main():
 
     st.subheader("Zusammenfassungen")
     if not summaries:
-        st.info("Keine Zusammenfassungen für das Dokument gefunden. Erzeuge neue Zusammenfassungen und lade sie in die DB.")
+        st.info(
+            "Keine Zusammenfassungen für das Dokument gefunden. Erzeuge neue Zusammenfassungen und lade sie in die DB."
+        )
     else:
         # Build stable tab order; fall back to title
-        labels = [f"{s['section_id']} — {s.get('title') or ''}".strip(" —") for s in summaries]
+        labels = [
+            f"{s['section_id']} — {s.get('title') or ''}".strip(" —") for s in summaries
+        ]
         tabs = st.tabs(labels)
         for tab, s in zip(tabs, summaries):
             with tab:
-                meta = f"Pages {s.get('start_page')}–{s.get('end_page')}" if s.get("start_page") and s.get(
-                    "end_page") else ""
+                meta = (
+                    f"Pages {s.get('start_page')}–{s.get('end_page')}"
+                    if s.get("start_page") and s.get("end_page")
+                    else ""
+                )
                 if meta:
                     st.caption(meta)
                 # The summaries are multi-line text; render as Markdown
@@ -119,7 +131,9 @@ def main():
 
     st.subheader("Werte")
     if not rows:
-        st.info("Für das Dokument wurden keine Werte in der DB gefunden. Extrahiere zunächst die Werte und lade sie dann in die DB.")
+        st.info(
+            "Für das Dokument wurden keine Werte in der DB gefunden. Extrahiere zunächst die Werte und lade sie dann in die DB."
+        )
         st.stop()
 
     # Summary chips

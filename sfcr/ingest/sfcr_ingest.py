@@ -626,7 +626,6 @@ class SubsectionDetector:
         self,
         toc_items: List[TocItem],
         section_spans: List[SectionSpan],
-        page_count: int,
     ) -> List[SubsectionSpan]:
         """
         Build subsection spans from toc items, bounded within each section.
@@ -737,7 +736,6 @@ class SFCRIngestor:
         subsections = self.subs.detect(
             toc_items=toc_items,
             section_spans=sections,
-            page_count=self.loader.page_count(),
         )
 
         # Find E's start page (or the latest section’s end if E is missing)
