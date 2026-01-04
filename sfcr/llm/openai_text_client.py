@@ -23,7 +23,6 @@ def _sha256_text(s: str) -> str:
     return hashlib.sha256(s.encode("utf-8")).hexdigest()
 
 
-
 def openai_strict_json_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
     """
     Transform a JSON Schema to satisfy OpenAI structured outputs constraints:
@@ -39,7 +38,9 @@ def openai_strict_json_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
                 node[k] = _walk(v)
 
             # Enforce on objects
-            if node.get("type") == "object" and isinstance(node.get("properties"), dict):
+            if node.get("type") == "object" and isinstance(
+                node.get("properties"), dict
+            ):
                 props = node["properties"]
                 node["additionalProperties"] = False
                 node["required"] = list(props.keys())

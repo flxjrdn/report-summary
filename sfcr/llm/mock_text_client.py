@@ -5,10 +5,11 @@ from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
 from sfcr.extract.schema import ResponseLLM
+from sfcr.llm.llm_text_client import LLMTextClient
 
 
 @dataclass
-class MockTextClient:
+class MockTextClient(LLMTextClient):
     model: str = "mock"
 
     def generate_raw(

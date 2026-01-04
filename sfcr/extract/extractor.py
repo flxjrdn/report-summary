@@ -156,7 +156,9 @@ class LLMExtractor:
 
         raw = raw.strip()
         if not raw:
-            return ExtractionLLM(field_id=field.id, status="not_found", evidence=[], source_text=None)
+            return ExtractionLLM(
+                field_id=field.id, status="not_found", evidence=[], source_text=None
+            )
 
         parsed = ResponseLLM.model_validate_json(raw)
 
@@ -175,7 +177,7 @@ class LLMExtractor:
             evidence=[Evidence(page=page_start, ref=None, snippet_hash=sh)],
             source_text=src_text or None,
             scale_source=None,  # TODO remove scale_source
-            notes=None, # TODO remove notes
+            notes=None,  # TODO remove notes
         )
 
     def _build_prompt(

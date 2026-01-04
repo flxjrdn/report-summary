@@ -69,9 +69,7 @@ def extract_directory(
         )
         write_jsonl(rows, out_path)
         processed += 1
-        print(
-            f"[green]✓[/green] {pdf.name} → {out_path.name}"
-        )
+        print(f"[green]✓[/green] {pdf.name} → {out_path.name}")
         return True
 
     if show_progress:
