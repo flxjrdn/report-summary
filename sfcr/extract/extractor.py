@@ -149,10 +149,14 @@ class LLMExtractor:
         prompt = self._build_prompt(field, section_text, page_start, page_end)
 
         raw = self.text_client.generate_raw(
-            prompt,
+            prompt=prompt,
             json_schema=ResponseLLM.model_json_schema(),
             options={"num_predict": self.output_max_tokens},
         )
+
+        raw = raw.strip()
+        if not raw:
+            return ExtractionLLM(field_id=field.id, status="not_found", evidence=[], source_text=None)
 
         parsed = ResponseLLM.model_validate_json(raw)
 
@@ -166,13 +170,12 @@ class LLMExtractor:
             field_id=field.id,
             status=parsed.status,
             value_unscaled=parsed.value_unscaled,
-            value_scaled=parsed.value_scaled,
             unit=parsed.unit,
             scale=parsed.scale,
             evidence=[Evidence(page=page_start, ref=None, snippet_hash=sh)],
             source_text=src_text or None,
-            scale_source=parsed.scale_source,
-            notes=parsed.notes,
+            scale_source=None,  # TODO remove scale_source
+            notes=None, # TODO remove notes
         )
 
     def _build_prompt(
@@ -183,8 +186,9 @@ class LLMExtractor:
 You are an information extraction engine for German SFCR sections.
 
 Task:
-Extract exactly one value for the field below from the provided section snippet.
-If the value is not uniquely and explicitly present, set status "not_found" or "ambiguous" and leave numeric fields null.
+Extract exactly one value for the field below from the provided section text.
+If the value is not uniquely and explicitly present, set status to "not_found" or "ambiguous"
+and set all numeric fields to null.
 
 Field:
 - field_id: {field.id}
@@ -192,21 +196,39 @@ Field:
 - page_range: {page_start}-{page_end}
 - helpful_keywords: {field_keywords}
 
-Return ONLY a single JSON object with the following keys:
-- status (string) -> "ok" | "not_found" | "ambiguous"
-- value_unscaled (number|null)
-- value_scaled (number|null)
-- scale (number|null)
-- unit ("EUR"|"%"|null)
-- source_text (string|null)  # <=200 chars around the number
-- scale_source ("row"|"column"|"caption"|"nearby"|"model_guess"|null)
-- notes (string|null)
+Return ONLY one JSON object with EXACTLY these keys (always present):
+status, value_unscaled, scale, unit, source_text, scale_source, notes
+
+Definitions:
+- value_unscaled: the number as printed, WITHOUT applying scale
+- scale: 1 | 1000 | 1000000 | 1000000000 | null
+- unit: "EUR" for monetary amounts, "%" for percentages, else null
+- source_text: verbatim excerpt (<=200 chars) that includes the value AND the nearby label/keyword
+- scale_source: one of "row","column","caption","nearby","model_guess", or null
 
 Rules:
-- Parse numbers in German locale (thousands separators may be '.', spaces, NBSP).
-- If a value is followed by a previous-year value in parentheses like "123 456 (133 333) TEUR",
-  return the FIRST value (current year).
-- Output ONLY JSON. No extra text.
+1) Number parsing (German locale):
+   - Thousands separators may be ".", spaces, NBSP.
+   - Decimal separator may be ",".
+2) Previous year in parentheses:
+   - If you see "X (Y)" where X and Y are numbers next to each other,
+     treat X as current year and Y as previous year. Return X.
+3) Disambiguation:
+   - Prefer a number that appears on the SAME LINE (or same table row) as one of the helpful_keywords.
+   - If multiple candidates remain, set status="ambiguous".
+4) Scale detection (set scale, do NOT multiply into value_unscaled):
+   - If the relevant row/column/caption/nearby text indicates:
+     * "EUR" or "€" -> scale = 1 (unless TEUR/Tsd/Mio/Mrd is stated)
+     * "TEUR", "Tsd", "Tsd €", "Tausend" -> scale = 1000
+     * "Mio", "Million" -> scale = 1000000
+     * "Mrd", "Milliarde" -> scale = 1000000000
+   - scale_source should reflect where you found the scale token (row/column/caption/nearby).
+   - If no scale info is present, set scale=null and scale_source=null.
+5) If status != "ok":
+   - value_unscaled=null, scale=null, unit=null, scale_source=null
+   - source_text may be null
+6) Treat hyphenated line breaks as merged words (e.g. "Mindestkapitalanfor-\\nderung" -> "Mindestkapitalanforderung").
+7) Output ONLY JSON. No prose, no markdown.
 
 Section text:
 ---
@@ -272,7 +294,6 @@ def extract_for_document(
 
         print(f.id)  # TODO delete
         start, end = span
-        print(f"start: {start}, end: {end}")  # TODO delete
         section_text, page_texts = extract_text_pages(pdf_path, start, end)
         section_text, page_texts = (
             normalize_hyphenation(section_text),
@@ -280,7 +301,8 @@ def extract_for_document(
         )
         # LLM pass
         llm_out = extractor.extract(f, section_text, start, end)
-        print(llm_out.value_scaled)  # TODO delete
+        print(llm_out.value_unscaled)  # TODO delete
+        print(llm_out.scale)  # TODO delete
         # context scale tokens (caption > column > nearby)
         tokens = harvest_scale_tokens(page_texts)
         # deterministic verification

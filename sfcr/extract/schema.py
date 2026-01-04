@@ -18,8 +18,7 @@ class Evidence(BaseModel):
 class ResponseLLM(BaseModel):
     status: Status
     value_unscaled: float
-    value_scaled: float
-    scale: Optional[Literal[1, 1_000, 1_000_000]] = None
+    scale: Optional[Literal[1, 1_000, 1_000_000, 1_000_000_000]] = None
     unit: Optional[Literal["EUR", "%"]] = None
     source_text: Optional[str] = Field(default=None)
 
@@ -30,7 +29,6 @@ class ExtractionLLM(BaseModel):
     field_id: str
     status: Status
     value_unscaled: Optional[float] = None
-    value_scaled: Optional[float] = None
     unit: Optional[Literal["EUR", "%"]] = None
     scale: Optional[float] = Field(default=None, description="1|1e3|1e6|…")
     evidence: List[Evidence] = Field(default_factory=list)

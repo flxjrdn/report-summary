@@ -123,7 +123,7 @@ def extract(
         None,
         help="Output JSONL (default: <output_dir_extract>/<doc_id>.extractions.jsonl)",
     ),
-    provider: str = typer.Option("mock", help="LLM provider: ollama | mock"),
+    provider: str = typer.Option("mock", help="LLM provider: ollama | openai | mock"),
     model: str = typer.Option(
         "", help="Model name for provider (e.g., 'mistral' for ollama)"
     ),

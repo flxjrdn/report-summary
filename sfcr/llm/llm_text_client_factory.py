@@ -10,7 +10,7 @@ def create_llm_text_client(provider: str, **kwargs: Any) -> LLMTextClient:
     if provider == "ollama":
         return OllamaTextClient(**kwargs)
     elif provider == "openai":
-        return OpenAITextClient()
+        return OpenAITextClient(**kwargs)
     elif provider == "mock":
         return MockTextClient()
-    raise ValueError(f"Unknown LLM provider: {provider}. Use 'ollama' or 'mock'.")
+    raise ValueError(f"Unknown LLM provider: {provider}. Use 'openai', 'ollama' or 'mock'.")
