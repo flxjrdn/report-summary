@@ -25,6 +25,7 @@ class FieldDef:
     unit: str  # "EUR" or "%"
     typical_scale: float | None
     keywords: List[str]
+    notes: str | None
 
 
 def load_fields(path: Path) -> List[FieldDef]:
@@ -41,6 +42,7 @@ def load_fields(path: Path) -> List[FieldDef]:
                 unit=r["unit"],
                 typical_scale=r.get("typical_scale"),
                 keywords=r.get("keywords", []),
+                notes=r.get("notes", ""),
             )
         )
     return out
@@ -197,6 +199,7 @@ Field:
 - expected_unit: {field.unit}
 - page_range: {page_start}-{page_end}
 - helpful_keywords: {field_keywords}
+- notes: {field.notes}
 
 Return ONLY one JSON object with EXACTLY these keys (always present):
 status, value_unscaled, scale, unit, source_text, scale_source, notes
