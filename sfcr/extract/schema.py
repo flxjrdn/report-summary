@@ -7,15 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 Status = Literal["ok", "not_found"]
 
-
-ScaleSource = Literal[
-    "row",
-    "column",
-    "caption",
-    "nearby",
-    "model_guess",
-    "default",
-]
+MAX_LENGTH_SOURCE_TEXT = 600
 
 
 class Evidence(BaseModel):
@@ -27,7 +19,7 @@ class Evidence(BaseModel):
 
 class ResponseLLM(BaseModel):
     status: Status
-    value_unscaled: float
+    value_unscaled: Optional[float] = None
     scale: Optional[Literal[1, 1_000, 1_000_000, 1_000_000_000]] = None
     unit: Optional[Literal["EUR", "%"]] = None
     source_text: Optional[str] = Field(default=None)
@@ -42,9 +34,7 @@ class ExtractionLLM(BaseModel):
     unit: Optional[Literal["EUR", "%"]] = None
     scale: Optional[float] = Field(default=None, description="1|1e3|1e6|…")
     evidence: List[Evidence] = Field(default_factory=list)
-    source_text: Optional[str] = Field(default=None, max_length=200)
-    scale_source: Optional[ScaleSource] = None
-    notes: Optional[str] = None
+    source_text: Optional[str] = Field(default=None, max_length=MAX_LENGTH_SOURCE_TEXT)
 
     @field_validator("source_text")
     @classmethod
@@ -72,7 +62,6 @@ class VerifiedExtraction(BaseModel):
     evidence: List[Evidence] = Field(default_factory=list)
     source_text: Optional[str] = None
     scale_applied: Optional[float] = None
-    scale_source: Optional[str] = None
     verifier_notes: Optional[str] = None
 
     @model_validator(mode="after")

@@ -9,7 +9,13 @@ from typing import List, Optional, Tuple
 import fitz  # PyMuPDF
 import yaml
 
-from sfcr.extract.schema import Evidence, ExtractionLLM, ResponseLLM, VerifiedExtraction
+from sfcr.extract.schema import (
+    MAX_LENGTH_SOURCE_TEXT,
+    Evidence,
+    ExtractionLLM,
+    ResponseLLM,
+    VerifiedExtraction,
+)
 from sfcr.extract.verify import verify_extraction
 from sfcr.ingest.schema import IngestionResult
 from sfcr.llm.llm_text_client import LLMTextClient
@@ -165,8 +171,8 @@ class LLMExtractor:
         parsed = ResponseLLM.model_validate_json(raw)
 
         src_text = (parsed.source_text or "").strip()
-        if len(src_text) > 200:
-            src_text = src_text[:197] + "..."
+        if len(src_text) > MAX_LENGTH_SOURCE_TEXT:
+            src_text = src_text[: MAX_LENGTH_SOURCE_TEXT - 3] + "..."
 
         sh = _mk_snippet_hash(src_text, field.id, page_start)
 
@@ -178,8 +184,6 @@ class LLMExtractor:
             scale=parsed.scale,
             evidence=[Evidence(page=page_start, ref=None, snippet_hash=sh)],
             source_text=src_text or None,
-            scale_source=None,  # TODO remove scale_source
-            notes=None,  # TODO remove notes
         )
 
     def _build_prompt(
@@ -205,11 +209,10 @@ Return ONLY one JSON object with EXACTLY these keys (always present):
 status, value_unscaled, scale, unit, source_text, scale_source, notes
 
 Definitions:
-- value_unscaled: the number as printed, WITHOUT applying scale
+- value_unscaled: the number as printed, WITHOUT applying scale and WITHOUT any thousands separators
 - scale: 1 | 1000 | 1000000 | 1000000000 | null
 - unit: "EUR" for monetary amounts, "%" for percentages, else null
-- source_text: verbatim excerpt (<=200 chars) that includes the value AND the nearby label/keyword
-- scale_source: one of "row","column","caption","nearby","model_guess", or null
+- source_text: verbatim excerpt (<={MAX_LENGTH_SOURCE_TEXT} chars) that includes the value AND the nearby label/keyword
 
 Rules:
 1) Number parsing (German locale):
@@ -227,10 +230,9 @@ Rules:
      * "TEUR", "Tsd", "Tsd €", "Tausend" -> scale = 1000
      * "Mio", "Million" -> scale = 1000000
      * "Mrd", "Milliarde" -> scale = 1000000000
-   - scale_source should reflect where you found the scale token (row/column/caption/nearby).
-   - If no scale info is present, set scale=null and scale_source=null.
+   - If no scale info is present, set scale=null
 5) If status != "ok":
-   - value_unscaled=null, scale=null, unit=null, scale_source=null
+   - value_unscaled=null, scale=null, unit=null
    - source_text may be null
 6) Treat hyphenated line breaks as merged words (e.g. "Mindestkapitalanfor-\\nderung" -> "Mindestkapitalanforderung").
 7) Output ONLY JSON. No prose, no markdown.
@@ -291,7 +293,6 @@ def extract_for_document(
                     evidence=[],
                     source_text=None,
                     scale_applied=None,
-                    scale_source=None,
                     verifier_notes="no_section",
                 )
             )
@@ -321,7 +322,7 @@ def extract_for_document(
             doc_id=doc_id,
             extr=llm_out,
             typical_scale=f.typical_scale,
-            page_text_for_scale=page_text_for_scale,  # NEW
+            page_text_for_scale=page_text_for_scale,
             ratio_check=None,
         )
 

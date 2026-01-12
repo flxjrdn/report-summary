@@ -4,8 +4,6 @@ import re
 from dataclasses import dataclass
 from typing import Optional, Tuple
 
-from sfcr.extract.schema import ScaleSource
-
 NBSP = "\u00a0"
 NNBSP = "\u202f"
 THIN = "\u2009"
@@ -54,7 +52,6 @@ _CAPTION_CUES = (
 class ScaleHit:
     scale: Optional[float]  # 1000/1e6/1e9 or None
     unit: Optional[str]  # "EUR" | "%" | None
-    source: Optional[ScaleSource]  # "row"|"nearby"|"caption"|"default"|None
     label: Optional[str]  # e.g. "TEUR", "Tsd €", ...
     evidence_line: Optional[str]  # the line where we found it (debugging)
 
@@ -123,19 +120,14 @@ def infer_scale_from_source_text(source_text: Optional[str]) -> Optional[ScaleHi
         return ScaleHit(
             scale=scale,
             unit=unit or "EUR",
-            source="row",
             label=label,
             evidence_line=source_text,
         )
     # If we only saw EUR and nothing else, scale is 1 (but we often treat as scale=None and apply 1 later)
     if unit == "EUR":
-        return ScaleHit(
-            scale=1.0, unit="EUR", source="row", label="EUR", evidence_line=source_text
-        )
+        return ScaleHit(scale=1.0, unit="EUR", label="EUR", evidence_line=source_text)
     if unit == "%":
-        return ScaleHit(
-            scale=None, unit="%", source="row", label="%", evidence_line=source_text
-        )
+        return ScaleHit(scale=None, unit="%", label="%", evidence_line=source_text)
     return None
 
 
@@ -172,9 +164,7 @@ def infer_scale_from_page_caption(page_text: str) -> Optional[ScaleHit]:
         if sc is None:
             continue
         unit = _detect_unit(ln) or "EUR"
-        return ScaleHit(
-            scale=sc, unit=unit, source="caption", label=label, evidence_line=ln
-        )
+        return ScaleHit(scale=sc, unit=unit, label=label, evidence_line=ln)
     return None
 
 
@@ -218,21 +208,15 @@ def infer_scale_near_source(
         unit = _detect_unit(near) or "EUR"
         lines = [ln.strip() for ln in near.splitlines() if ln.strip()]
         ev = lines[0] if lines else None
-        return ScaleHit(
-            scale=sc, unit=unit, source="nearby", label=label, evidence_line=ev
-        )
+        return ScaleHit(scale=sc, unit=unit, label=label, evidence_line=ev)
 
     # If we only see EUR near source, treat as scale=1
     if _EUR_PAT.search(near):
         unit = "EUR"
-        return ScaleHit(
-            scale=1.0, unit=unit, source="nearby", label="EUR", evidence_line=None
-        )
+        return ScaleHit(scale=1.0, unit=unit, label="EUR", evidence_line=None)
 
     if _PCT_PAT.search(near):
-        return ScaleHit(
-            scale=None, unit="%", source="nearby", label="%", evidence_line=None
-        )
+        return ScaleHit(scale=None, unit="%", label="%", evidence_line=None)
 
     return None
 
@@ -272,10 +256,9 @@ def infer_scale(
         return ScaleHit(
             scale=float(typical_scale),
             unit="EUR",
-            source="default",
             label="default",
             evidence_line=None,
         )
 
     # 5) unknown
-    return ScaleHit(scale=None, unit=None, source=None, label=None, evidence_line=None)
+    return ScaleHit(scale=None, unit=None, label=None, evidence_line=None)

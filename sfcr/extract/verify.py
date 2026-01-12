@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 from .scale_detect import infer_scale
-from .schema import ExtractionLLM, ScaleSource, VerifiedExtraction
+from .schema import ExtractionLLM, VerifiedExtraction
 
 DE_NBSP = "\u00a0"
 LEADER_CHARS = r"\.\u2026\u00B7\u2219\u22EF\u2024\u2027\uf020·•⋯∙"
@@ -22,6 +22,26 @@ NUM_CORE = re.compile(
     re.VERBOSE,
 )
 
+# Remove section/subsection references like "E.2.2", "A.1", "B.12.3"
+_SECTION_CODE_RE = re.compile(r"\b[A-E]\.\d+(?:\.\d+)*\b", re.IGNORECASE)
+
+# Number extractor that forbids mixing dot-grouping and space-grouping in ONE number
+_NUM_EXTRACT_RE = re.compile(
+    r"""
+    (?P<neg>\()?\s*
+    (?P<int>
+        (?:\d{1,3}(?:\.\d{3})+)                # dot thousands: 1.234.567
+        |
+        (?:\d{1,3}(?:[ \u00a0\u202f\u2009]\d{3})+)  # space/nbsp thousands: 1 234 567 / 1 234 567 / 1 234 567
+        |
+        (?:\d+)                                # plain digits
+    )
+    (?P<dec>,\d+)?\s*
+    (?P<pct>%){0,1}
+    \)?                                        # allow closing ')' for negative
+    """,
+    re.VERBOSE,
+)
 
 ALLOWED_SCALES = {None, 1.0, 1000.0, 1_000_000.0, 1_000_000_000.0}
 
@@ -71,14 +91,16 @@ def extract_numbers_de(text: str) -> List[float]:
     if not text:
         return []
 
-    # Normalize spaces exactly like parse_number_de
+    # Normalize spaces like parse_number_de
     t = text.replace("\u00a0", " ").replace("\u202f", " ").replace("\u2009", " ")
     t = re.sub(r"\s+", " ", t)
 
+    # Remove SFCR section codes (E.2.2 etc.) so we don't pick up the "2" digits
+    t = _SECTION_CODE_RE.sub(" ", t)
+
     values: List[float] = []
 
-    # NUM_CORE already exists in your module; reuse it
-    for m in NUM_CORE.finditer(t):
+    for m in _NUM_EXTRACT_RE.finditer(t):
         try:
             val = _to_float_de(m.group("int"), m.group("dec"))
             if m.group("neg"):
@@ -169,7 +191,6 @@ def verify_extraction(
         evidence=extr.evidence,
         source_text=extr.source_text,
         scale_applied=None,
-        scale_source=None,
         verifier_notes=None,
     )
 
@@ -179,18 +200,6 @@ def verify_extraction(
         return base
 
     notes: list[str] = []
-
-    # --- Unit sanity check (weakly) -----------------------------------------
-    # Only a heuristic: we look at source_text if present
-    if extr.source_text:
-        st = extr.source_text
-        has_pct = "%" in st
-        has_eur = ("EUR" in st) or ("€" in st)
-
-        if has_pct and extr.unit != "%":
-            notes.append("unit_mismatch_snippet_percent")
-        if has_eur and extr.unit == "%":
-            notes.append("unit_mismatch_snippet_eur")
 
     # --- Scale resolution ----------------------------------------------------
     hit = infer_scale(
@@ -203,22 +212,18 @@ def verify_extraction(
     model_scale = extr.scale if extr.scale in ALLOWED_SCALES else None
 
     scale_final: float | None = None
-    scale_source: ScaleSource | None = None
 
     # 1) model scale wins (if allowed)
     if model_scale is not None:
         scale_final = float(model_scale)
-        scale_source = extr.scale_source  # may be None, that's okay
 
     # 2) otherwise use inferred scale
     if scale_final is None and hit.scale is not None:
         scale_final = float(hit.scale)
-        scale_source = hit.source
 
     # 3) EUR amounts: missing scale => assume 1.0, record as default
     if scale_final is None and extr.unit == "EUR":
         scale_final = 1.0
-        scale_source = scale_source or "default"
 
     # --- Canonical value from LLM value_unscaled ----------------------------
     value_canon: float | None = None
@@ -242,7 +247,6 @@ def verify_extraction(
     unit = extr.unit if value_canon is not None else None
 
     # --- Value consistency check against snippet (non-destructive) ----------
-    # This should NOT pick a different value; only checks consistency.
     if extr.source_text:
         pair = extract_current_prev_pair(
             extr.source_text
@@ -271,29 +275,17 @@ def verify_extraction(
 
     # --- Confidence ---------------------------------------------------------
     # Start low; add points for strong evidence.
-    conf = 0.25
+    conf = 0.5
 
     # snippet present is good
     if extr.source_text:
-        conf += 0.15
+        conf += 0.10
 
     # evidence page present is good
     if extr.evidence:
         conf += 0.10
 
-    # scale quality
-    if scale_source in ("row",):
-        conf += 0.30
-    elif scale_source in ("nearby",):
-        conf += 0.20
-    elif scale_source in ("caption",):
-        conf += 0.15
-    elif scale_source in ("default",):
-        conf += 0.05
-
     # penalize issues
-    if any(n.startswith("unit_mismatch") for n in notes):
-        conf -= 0.25
     if "value_not_found_in_source_text" in notes:
         conf -= 0.35
     if "looks_like_prev_year_value" in notes:
@@ -316,7 +308,6 @@ def verify_extraction(
         for block_text in (
             "value_not_found_in_source_text",
             "looks_like_prev_year_value",
-            "unit_mismatch",
         )
         for n in notes
     )
@@ -324,7 +315,6 @@ def verify_extraction(
 
     if extr.unit == "%":
         scale_final = None
-        scale_source = None
 
     return VerifiedExtraction(
         **{
@@ -334,7 +324,6 @@ def verify_extraction(
             "unit": unit,
             "confidence": conf,
             "scale_applied": float(scale_final) if scale_final is not None else None,
-            "scale_source": scale_source,
             "verifier_notes": ";".join(notes) if notes else None,
         }
     )

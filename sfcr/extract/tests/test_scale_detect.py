@@ -17,7 +17,6 @@ def test_infer_scale_from_source_text_teur_with_eur():
     assert hit is not None
     assert hit.scale == 1000.0
     assert hit.unit == "EUR"
-    assert hit.source == "row"
     assert hit.label in ("TEUR EUR", "TEUR €", "TEUR")  # depends if EUR/€ is present
     assert "TEUR" in (hit.evidence_line or "")
 
@@ -27,7 +26,6 @@ def test_infer_scale_from_source_text_tsd_euro_symbol():
     assert hit is not None
     assert hit.scale == 1000.0
     assert hit.unit == "EUR"
-    assert hit.source == "row"
     assert hit.label == "Tsd €"
 
 
@@ -36,7 +34,6 @@ def test_infer_scale_from_source_text_mio_eur():
     assert hit is not None
     assert hit.scale == 1_000_000.0
     assert hit.unit == "EUR"
-    assert hit.source == "row"
     assert hit.label == "Mio EUR"
 
 
@@ -47,7 +44,6 @@ def test_infer_scale_from_source_text_mrd_with_soft_hyphen_and_nbsp():
     assert hit is not None
     assert hit.scale == 1_000_000_000.0
     assert hit.unit == "EUR"
-    assert hit.source == "row"
     assert hit.label == "Mrd EUR"
 
 
@@ -56,7 +52,6 @@ def test_infer_scale_from_source_text_eur_only_returns_scale_1():
     assert hit is not None
     assert hit.scale == 1.0
     assert hit.unit == "EUR"
-    assert hit.source == "row"
     assert hit.label == "EUR"
 
 
@@ -65,7 +60,6 @@ def test_infer_scale_from_source_text_percent():
     assert hit is not None
     assert hit.scale is None
     assert hit.unit == "%"
-    assert hit.source == "row"
     assert hit.label == "%"
 
 
@@ -103,7 +97,6 @@ def test_infer_scale_from_page_caption_prefers_explicit_scale_not_plain_eur():
     assert hit is not None
     assert hit.scale == 1000.0
     assert hit.unit == "EUR"
-    assert hit.source == "caption"
     assert "TEUR" in (hit.label or "")
 
 
@@ -135,7 +128,6 @@ def test_infer_scale_near_source_finds_scale_token_nearby():
     assert hit is not None
     assert hit.scale == 1000.0
     assert hit.unit == "EUR"
-    assert hit.source == "nearby"
     assert "TEUR" in (hit.label or "")
 
 
@@ -152,7 +144,6 @@ def test_infer_scale_near_source_eur_only_returns_scale_1():
     assert hit is not None
     assert hit.scale == 1.0
     assert hit.unit == "EUR"
-    assert hit.source == "nearby"
     assert hit.label == "EUR"
 
 
@@ -168,7 +159,6 @@ def test_infer_scale_near_source_percent_returns_unit_percent():
     assert hit is not None
     assert hit.scale is None
     assert hit.unit == "%"
-    assert hit.source == "nearby"
     assert hit.label == "%"
 
 
@@ -189,7 +179,6 @@ def test_infer_scale_precedence_row_beats_nearby_and_caption():
         ]
     )
     hit = infer_scale(source_text=source, page_text=page, typical_scale=1000.0)
-    assert hit.source == "row"
     assert hit.scale == 1.0
     assert hit.unit == "EUR"
     assert hit.label == "EUR"
@@ -207,7 +196,6 @@ def test_infer_scale_precedence_nearby_beats_caption():
         ]
     )
     hit = infer_scale(source_text=source, page_text=page, typical_scale=1000.0)
-    assert hit.source == "nearby"
     assert hit.scale == 1_000_000.0
     assert hit.unit == "EUR"
     assert hit.label == "Mio EUR"
@@ -224,7 +212,6 @@ def test_infer_scale_caption_used_when_no_row_and_no_nearby():
         ]
     )
     hit = infer_scale(source_text=source, page_text=page, typical_scale=1000.0)
-    assert hit.source == "caption"
     assert hit.scale == 1_000_000.0
     assert hit.unit == "EUR"
     assert "Mio" in (hit.label or "")
@@ -232,7 +219,6 @@ def test_infer_scale_caption_used_when_no_row_and_no_nearby():
 
 def test_infer_scale_default_used_when_no_signals():
     hit = infer_scale(source_text=None, page_text=None, typical_scale=1000.0)
-    assert hit.source == "default"
     assert hit.scale == 1000.0
     assert hit.unit == "EUR"
     assert hit.label == "default"
@@ -240,7 +226,6 @@ def test_infer_scale_default_used_when_no_signals():
 
 def test_infer_scale_unknown_when_no_signals_and_no_default():
     hit = infer_scale(source_text=None, page_text=None, typical_scale=None)
-    assert hit.source is None
     assert hit.scale is None
     assert hit.unit is None
     assert hit.label is None

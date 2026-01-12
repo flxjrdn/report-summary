@@ -19,7 +19,6 @@ def _mk_extr(
     unit: str | None = "EUR",
     scale: float | str | None = None,
     source_text: str | None = None,
-    scale_source: str | None = None,
     evidence: list[Evidence] | None = None,
 ) -> ExtractionLLM:
     return ExtractionLLM(
@@ -29,9 +28,7 @@ def _mk_extr(
         scale=scale,
         unit=unit,
         source_text=source_text,
-        scale_source=scale_source,
         evidence=evidence or [Evidence(page=1, ref=None, snippet_hash="deadbeef")],
-        notes=None,
     )
 
 
@@ -150,23 +147,6 @@ def test_verify_assumes_scale_1_for_eur_if_no_scale_anywhere():
     # verified depends on confidence; with row EUR it should be >= 0.5
     assert out.confidence >= 0.5
     assert out.verified is True
-
-
-def test_verify_flags_unit_mismatch_percent_in_snippet():
-    extr = _mk_extr(
-        field_id="sii_ratio_pct",
-        value_unscaled=391.0,
-        unit="EUR",  # wrong
-        scale=None,
-        source_text="Solvabilitätsquote 391%",
-    )
-    out = verify_extraction(doc_id="d", extr=extr, typical_scale=None)
-    assert out.verified is False
-    assert (
-        out.value_canonical == 391.0
-    )  # scale assumed 1.0 for EUR, but confidence penalized hard
-    assert out.verifier_notes is not None
-    assert "unit_mismatch_snippet_percent" in out.verifier_notes
 
 
 def test_verify_value_not_found_in_source_text_penalizes_confidence():

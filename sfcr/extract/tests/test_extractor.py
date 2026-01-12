@@ -6,7 +6,12 @@ from pathlib import Path
 from typing import Any, Optional
 
 from sfcr.extract.extractor import LLMExtractor, extract_for_document
-from sfcr.extract.schema import Evidence, ExtractionLLM, VerifiedExtraction
+from sfcr.extract.schema import (
+    MAX_LENGTH_SOURCE_TEXT,
+    Evidence,
+    ExtractionLLM,
+    VerifiedExtraction,
+)
 from sfcr.llm.llm_text_client import LLMTextClient
 
 # ---------------------------
@@ -135,7 +140,6 @@ def test_llm_extractor_parses_response_and_creates_snippet_hash_hex():
             "scale": 1000.0,
             "unit": "EUR",
             "source_text": "Mindestkapitalanforderung 123 456 (133 333) TEUR",
-            "scale_source": "row",
             "notes": None,
         },
         ensure_ascii=False,
@@ -168,8 +172,8 @@ def test_llm_extractor_parses_response_and_creates_snippet_hash_hex():
     )  # extractor uses length=16
 
 
-def test_llm_extractor_truncates_source_text_to_200_chars():
-    long_src = "X" * 250
+def test_llm_extractor_truncates_source_text_to_max_chars():
+    long_src = "X" * (MAX_LENGTH_SOURCE_TEXT + 50)
     raw = json.dumps(
         {
             "status": "ok",
@@ -177,8 +181,6 @@ def test_llm_extractor_truncates_source_text_to_200_chars():
             "scale": None,
             "unit": "EUR",
             "source_text": long_src,
-            "scale_source": None,
-            "notes": None,
         }
     )
     client = _StubTextClient(raw=raw)
@@ -198,7 +200,7 @@ def test_llm_extractor_truncates_source_text_to_200_chars():
     out = ex.extract(field, "t", 1, 1)
 
     assert out.source_text is not None
-    assert len(out.source_text) <= 200
+    assert len(out.source_text) <= MAX_LENGTH_SOURCE_TEXT
     assert out.source_text.endswith("...")
 
 
@@ -265,8 +267,6 @@ def test_extract_for_document_prefers_subsection_span_over_section(
             "scale": 1000.0,
             "unit": "EUR",
             "source_text": "SCR 10 TEUR",
-            "scale_source": "row",
-            "notes": None,
         }
     )
     extractor = LLMExtractor(text_client=_StubTextClient(raw))
@@ -334,8 +334,6 @@ def test_extract_for_document_falls_back_to_section_when_subsection_missing(
             "scale": None,
             "unit": "EUR",
             "source_text": "MCR 1 EUR",
-            "scale_source": "row",
-            "notes": None,
         }
     )
     extractor = LLMExtractor(text_client=_StubTextClient(raw))
@@ -461,7 +459,6 @@ def test_extract_for_document_uses_evidence_page_to_choose_page_text_for_scale(
             evidence=extr.evidence,
             source_text=extr.source_text,
             scale_applied=None,
-            scale_source=None,
             verifier_notes="stub",
         )
 
@@ -481,8 +478,6 @@ def test_extract_for_document_uses_evidence_page_to_choose_page_text_for_scale(
             scale=None,
             evidence=[Evidence(page=12, ref=None, snippet_hash="deadbeefdeadbeef")],
             source_text="SCR 12",
-            scale_source=None,
-            notes=None,
         )
 
     extractor = LLMExtractor(text_client=_StubTextClient(raw="{}"))

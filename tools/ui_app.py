@@ -155,9 +155,7 @@ def main():
         with st.expander(header, expanded=False):
             c1, c2 = st.columns([2, 3])
             with c1:
-                st.write(
-                    f"Scale applied: `{r.get('scale_applied')}` ({r.get('scale_source') or '—'})"
-                )
+                st.write(f"Scale applied: `{r.get('scale_applied')}`")
                 if show_source and r.get("source_text"):
                     st.code(r["source_text"])
                 if issues:

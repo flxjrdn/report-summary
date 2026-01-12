@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from sfcr.llm.llm_text_client import LLMTextClient
+from sfcr.llm.llm_text_client import LLMResponseMeta, LLMTextClient
 
 # Note: do NOT import openai at module import time if you want tests to run without it.
 # We import lazily in _client().
@@ -102,6 +102,17 @@ class OpenAITextClient(LLMTextClient):
     debug_raw: bool = False
     debug_dir: Path = field(default_factory=lambda: Path("artifacts") / "openai-debug")
 
+    last_meta: LLMResponseMeta = field(
+        default_factory=LLMResponseMeta, init=False, repr=False
+    )
+
+    def was_truncated(self) -> bool:
+        return (
+            self.last_meta.status == "incomplete"
+            and self.last_meta.incomplete_reason
+            in {"max_output_tokens", "max_context_length"}
+        )
+
     def _client(self):
         """
         Lazily construct OpenAI client.
@@ -159,6 +170,12 @@ class OpenAITextClient(LLMTextClient):
             "reasoning": {"effort": "minimal"},
         }
 
+        # allow caller to override token budget (useful for summaries)
+        if options:
+            mot = options.get("max_output_tokens")
+            if isinstance(mot, int) and mot > 0:
+                payload["max_output_tokens"] = mot
+
         # GPT-5 models do not support temperature
         is_gpt5 = self.model.startswith("gpt-5")
         if not is_gpt5:
@@ -175,7 +192,7 @@ class OpenAITextClient(LLMTextClient):
                 }
             }
         else:
-            payload["text"] = {"format": {"type": "text", "name": "text"}}
+            payload["text"] = {"format": {"type": "text"}}
 
         # Cache
         if self.enable_cache:
@@ -189,6 +206,35 @@ class OpenAITextClient(LLMTextClient):
         for attempt in range(self.max_retries + 1):
             try:
                 resp = client.responses.create(**payload)
+
+                # --- capture meta for downstream logic (summaries/extraction) ----------------
+                status = getattr(resp, "status", None)
+                incomplete = getattr(resp, "incomplete_details", None)
+                reason = (
+                    getattr(incomplete, "reason", None)
+                    if incomplete is not None
+                    else None
+                )
+
+                usage = getattr(resp, "usage", None)
+                input_tokens = (
+                    getattr(usage, "input_tokens", None) if usage is not None else None
+                )
+                output_tokens = (
+                    getattr(usage, "output_tokens", None) if usage is not None else None
+                )
+                total_tokens = (
+                    getattr(usage, "total_tokens", None) if usage is not None else None
+                )
+
+                self.last_meta = LLMResponseMeta(
+                    status=status,
+                    incomplete_reason=reason,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    total_tokens=total_tokens,
+                )
+
                 text = _response_to_text(resp)
 
                 if not isinstance(text, str):

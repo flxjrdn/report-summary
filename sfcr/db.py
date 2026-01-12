@@ -14,7 +14,7 @@ from sfcr.config import get_settings
 
 def db_path_default() -> Path:
     cfg = get_settings()
-    return Path(cfg.output_dir) / "sfcr.sqlite"
+    return Path(cfg.output_dir) / "sfcr__.sqlite"
 
 
 def connect(db_path: Optional[Path] = None) -> sqlite3.Connection:
@@ -55,7 +55,6 @@ def init_db(db_path: Optional[Path] = None) -> Path:
       issues          TEXT,
       source_text     TEXT,
       scale_applied   REAL,
-      scale_source    TEXT,
       updated_at      TEXT DEFAULT (datetime('now')),
       PRIMARY KEY (doc_id, field_id),
       FOREIGN KEY (doc_id) REFERENCES documents(doc_id) ON DELETE CASCADE
@@ -200,6 +199,7 @@ def load_extractions_from_dir(
 
     n_docs, n_rows = 0, 0
     for jpath in sorted(root.glob("*.extractions.jsonl")):
+        n_docs += 1
         # upsert each extraction line
         with jpath.open("r", encoding="utf-8") as fh:
             for line in fh:
@@ -214,8 +214,8 @@ def load_extractions_from_dir(
                 cur.execute(
                     """
                     INSERT INTO extractions
-                      (doc_id, field_id, value_canonical, unit, verified, confidence, page, status, issues, source_text, scale_applied, scale_source, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                      (doc_id, field_id, value_canonical, unit, verified, confidence, page, status, issues, source_text, scale_applied, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
                     ON CONFLICT(doc_id, field_id) DO UPDATE SET
                       value_canonical=excluded.value_canonical,
                       unit=excluded.unit,
@@ -226,7 +226,6 @@ def load_extractions_from_dir(
                       issues=excluded.issues,
                       source_text=excluded.source_text,
                       scale_applied=excluded.scale_applied,
-                      scale_source=excluded.scale_source,
                       updated_at=datetime('now');
                     """,
                     (
@@ -241,7 +240,6 @@ def load_extractions_from_dir(
                         issues,
                         j.get("source_text"),
                         j.get("scale_applied"),
-                        j.get("scale_source"),
                     ),
                 )
                 n_rows += 1
@@ -326,7 +324,7 @@ def get_extractions_for_doc(
     cur = con.cursor()
     rows = cur.execute(
         """
-        SELECT field_id, value_canonical, unit, verified, confidence, page, status, issues, source_text, scale_applied, scale_source
+        SELECT field_id, value_canonical, unit, verified, confidence, page, status, issues, source_text, scale_applied
         FROM extractions WHERE doc_id = ? ORDER BY field_id
     """,
         (doc_id,),
@@ -351,3 +349,7 @@ def get_summaries_for_doc(
     ).fetchall()
     con.close()
     return [dict(r) for r in rows]
+
+
+if __name__ == "__main__":
+    print(load_summaries_from_dir())

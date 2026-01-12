@@ -78,11 +78,9 @@ def _chunk_text(s: str, max_chars: int = 12000, overlap: int = 800) -> List[str]
 
 
 _SUMMARY_SYSTEM_INSTR = (
-    "Du fasst Abschnitte eines Solvency-II-SFCR für Aktuare zusammen."
-    "Erstelle 3–6 prägnante, sachliche und neutrale Stichpunkte."
-    "Nenne alle wesentlichen quantitativen Werte (mit Einheiten) sowie relevante Veränderungen gegenüber dem Vorjahr – ohne Zahlen zu erfinden."
-    "Bei überwiegend qualitativen Abschnitten konzentriere dich auf die zentralen Inhalte und Themen."
-    "Vermeide Standardformulierungen und kopiere keine Sätze wörtlich aus dem Ausgangstext."
+    "Fasse den SFCR-Abschnitt in 3–6 sachlichen Stichpunkten zusammen. "
+    "Nenne wesentliche Zahlen mit Einheiten. Keine erfundenen Zahlen. "
+    "Keine wörtlichen Kopien."
 )
 
 
@@ -123,26 +121,50 @@ def summarize_section(
     max_chars_per_chunk: int = 12000,
     overlap: int = 800,
 ) -> str:
-    """Chunk → summarize each chunk → synthesize (if needed). Returns final bullet list as text."""
+    """
+    Tries to summarize the whole section in one go. If the result is truncated,
+    we split the section into several chunks, summarize them individually and merge them.
+    """
     print(f"summarizing section {section.section_id} ...")
     text = _extract_text_for_pages(pdf, section.start_page, section.end_page)
     if not text.strip():
         return "Keine relevanten Inhalte gefunden."
 
+    # --- 1) try single-pass ---------------------------------------------------
+    prompt = _section_prompt(section).replace("{chunk}", text)
+
+    # keep output short to save money
+    resp = llm.generate_raw(prompt, options={"max_output_tokens": 350})
+    resp = (resp or "").strip()
+
+    # If OpenAI and truncated -> fallback to chunking
+    was_truncated = False
+    if hasattr(llm, "was_truncated") and callable(getattr(llm, "was_truncated")):
+        try:
+            was_truncated = bool(llm.was_truncated())
+        except Exception:
+            was_truncated = False
+
+    if resp and not was_truncated:
+        return resp
+
+    # --- 2) fallback: chunk + synthesize -------------------------------------
+    print(
+        "Summary result was truncated, so we chunk the section and summarize individual chunks, before merging them back together."
+    )
     chunks = _chunk_text(text, max_chars=max_chars_per_chunk, overlap=overlap)
 
     partials: List[str] = []
     for ch in chunks:
-        prompt = _section_prompt(section).replace("{chunk}", ch)
-        resp = _call_llm_generate(llm, prompt)
-        partials.append(resp)
+        p = _section_prompt(section).replace("{chunk}", ch)
+        partials.append((_call_llm_generate(llm, p) or "").strip())
 
     if len(partials) == 1:
-        return partials[0]
+        return partials[0] or "Keine relevanten Inhalte gefunden."
 
     joined = "\n\n---\n\n".join(partials)
     synth = _synthesis_prompt().replace("{bullets}", joined)
-    final = _call_llm_generate(llm, synth)
+    final = _call_llm_generate(llm, synth).strip()
     return final or joined
 
 
@@ -185,16 +207,16 @@ def run_summarize(
 
 if __name__ == "__main__":
     run_summarize(
-        doc_id="allianz-pkv_2024",
+        doc_id="sikv_2023",
         pdf_path=Path(
-            "/Users/felixjordan/Documents/code/report-summary/data/sfcrs/allianz-pkv_2024.pdf"
+            "/Users/felixjordan/Documents/code/report-summary/data/sfcrs/sikv_2023.pdf"
         ),
         ingest_json=Path(
-            "/Users/felixjordan/Documents/code/report-summary/artifacts/ingest/allianz-pkv_2024.ingest.json"
+            "/Users/felixjordan/Documents/code/report-summary/artifacts/ingest/sikv_2023.ingest.json"
         ),
         out_jsonl=Path(
-            "/Users/felixjordan/Documents/code/report-summary/artifacts/summaries/allianz-pkv_2024.summaries.jsonl"
+            "/Users/felixjordan/Documents/code/report-summary/artifacts/summaries/sikv_2023.summaries.jsonl"
         ),
         provider="openai",
-        model="gtp-5-nano",
+        model="gpt-5-mini",
     )
