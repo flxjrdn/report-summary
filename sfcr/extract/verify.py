@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
-from .schema import ExtractionLLM, VerifiedExtraction
+from .scale_detect import infer_scale
+from .schema import ExtractionLLM, ScaleSource, VerifiedExtraction
 
 DE_NBSP = "\u00a0"
 LEADER_CHARS = r"\.\u2026\u00B7\u2219\u22EF\u2024\u2027\uf020·•⋯∙"
@@ -21,13 +22,22 @@ NUM_CORE = re.compile(
     re.VERBOSE,
 )
 
-# Simple scale phrases (order matters: more specific first)
-SCALE_PATTERNS = [
-    (re.compile(r"\bMio\b|\bMillion(en)?\b", re.I), 1e6),
-    (re.compile(r"\bMrd\b|\bMilliarde(n)?\b", re.I), 1e9),
-    (re.compile(r"\bTEUR\b|\bTsd\b|\bTausend\b", re.I), 1e3),
-    (re.compile(r"\bEUR\b|\bEuro\b", re.I), 1.0),
-]
+
+ALLOWED_SCALES = {None, 1.0, 1000.0, 1_000_000.0, 1_000_000_000.0}
+
+# Allowed thousands separators inside numbers
+_SEP_CHARS = r"[ .\u00a0\u202f\u2009]"
+
+# German number core (no sign here; parentheses handled outside)
+_NUM_DE = rf"(?:\d{{1,3}}(?:{_SEP_CHARS}\d{{3}})+|\d+)"
+
+# Optional decimal part
+_NUM_DE_FULL = rf"(?:{_NUM_DE}(?:,\d+)?)"
+
+_CURRENT_PREV_RE = re.compile(
+    rf"(?P<curr>{_NUM_DE_FULL})\s*\(\s*(?P<prev>{_NUM_DE_FULL})\s*\)",
+    re.VERBOSE,
+)
 
 
 @dataclass
@@ -51,47 +61,33 @@ def _to_float_de(intpart: str, decpart: Optional[str]) -> float:
     return float(s)
 
 
-def parse_number_de(text: str) -> Optional[ParsedNumber]:
+def extract_numbers_de(text: str) -> List[float]:
     """
-    Parse the first German-formatted number in text.
-    Supports negatives in parentheses and %.
+    Extract ALL German-formatted numbers from text.
+
+    Returns a list of floats (unscaled), in textual order.
+    Percent signs are ignored here; unit checks happen elsewhere.
     """
     if not text:
-        return None
-    # Normalize spaces: replace NBSP, narrow no-break space, and thin space with normal space
-    text = text.replace(DE_NBSP, " ").replace("\u202f", " ").replace("\u2009", " ")
-    # Collapse multiple spaces to a single space
-    text = re.sub(r"\s+", " ", text)
-    m = NUM_CORE.search(text)
-    if not m:
-        return None
-    val = _to_float_de(m.group("int"), m.group("dec"))
-    neg = bool(m.group("neg"))
-    pct = bool(m.group("pct"))
-    if neg:
-        val = -val
-    return ParsedNumber(value=val, is_percent=pct, is_negative=neg)
+        return []
 
+    # Normalize spaces exactly like parse_number_de
+    t = text.replace("\u00a0", " ").replace("\u202f", " ").replace("\u2009", " ")
+    t = re.sub(r"\s+", " ", t)
 
-def infer_scale(context_tokens: Iterable[Tuple[str, str]]) -> Tuple[float, str]:
-    """
-    Inspect nearby tokens (caption/header/row text) to infer scale.
-    Returns (scale, source).
-    Precedence: caption > column > row > nearby; pass tokens in that order.
-    """
-    for token, source in context_tokens:
-        if not token:
+    values: List[float] = []
+
+    # NUM_CORE already exists in your module; reuse it
+    for m in NUM_CORE.finditer(t):
+        try:
+            val = _to_float_de(m.group("int"), m.group("dec"))
+            if m.group("neg"):
+                val = -val
+            values.append(val)
+        except Exception:
             continue
-        for pat, factor in SCALE_PATTERNS:
-            if pat.search(token):
-                # special-case: "in TEUR" / "Angaben in TEUR" etc.
-                if re.search(r"in\s+(TEUR|Tsd|Tausend)", token, re.I):
-                    return (1e3, source)
-                if re.search(r"in\s+Mio", token, re.I):
-                    return (1e6, source)
-                return (factor, source)
-    # unknown → leave undecided; caller can fall back to typical scale
-    return (None, "unknown")  # type: ignore
+
+    return values
 
 
 def _coerce_scale(x: Any) -> Optional[float]:
@@ -125,23 +121,43 @@ def apply_scale(value: float, scale: Optional[float]) -> float:
     return value * sc
 
 
+def _parse_de_number(num_str: str) -> float:
+    # same logic you already use elsewhere
+    s = num_str.strip()
+    s = s.replace("\u00a0", " ").replace("\u202f", " ").replace("\u2009", " ")
+    s = re.sub(r"\s+", " ", s)
+    s = s.replace(".", "").replace(" ", "")
+    s = s.replace(",", ".")
+    return float(s)
+
+
+def extract_current_prev_pair(text: str) -> Optional[Tuple[float, float]]:
+    if not text:
+        return None
+    t = text.replace("\u00a0", " ").replace("\u202f", " ").replace("\u2009", " ")
+    t = re.sub(r"\s+", " ", t)
+
+    m = _CURRENT_PREV_RE.search(t)
+    if not m:
+        return None
+
+    try:
+        curr = _parse_de_number(m.group("curr"))
+        prev = _parse_de_number(m.group("prev"))
+        return curr, prev
+    except Exception:
+        return None
+
+
 # ---------------- Verification ----------------
-
-
 def verify_extraction(
+    *,
     doc_id: str,
     extr: ExtractionLLM,
-    *,
     typical_scale: Optional[float],
-    context_scale_tokens: Iterable[Tuple[str, str]],  # list of (text, source_tag)
-    ratio_check: Optional[
-        Tuple[float, float]
-    ] = None,  # (expected, tolerance_abs) OR provide via cross_checks()
+    page_text_for_scale: str | None = None,
+    ratio_check: Optional[Tuple[float, float]] = None,
 ) -> VerifiedExtraction:
-    """
-    Deterministically re-parse source_text and apply scale.
-    """
-    # Default not verified
     base = VerifiedExtraction(
         doc_id=doc_id,
         field_id=extr.field_id,
@@ -154,62 +170,171 @@ def verify_extraction(
         source_text=extr.source_text,
         scale_applied=None,
         scale_source=None,
+        verifier_notes=None,
     )
 
-    # Status gates
-    if extr.status != "ok" or extr.source_text is None:
+    # Gate
+    if extr.status != "ok" or extr.value_unscaled is None:
+        base.verifier_notes = "no_value_or_not_ok"
         return base
 
-    # 1) Deterministic parse of source_text
-    p = parse_number_de(extr.source_text)
-    if p is None:
-        base.verifier_notes = "parse_failed"
-        return base
+    notes: list[str] = []
 
-    # 2) Unit check
-    if p.is_percent and extr.unit != "%":
-        base.verifier_notes = "unit_mismatch_percent"
-        return base
-    if (not p.is_percent) and extr.unit == "%":
-        base.verifier_notes = "unit_mismatch_number_vs_percent"
-        return base
+    # --- Unit sanity check (weakly) -----------------------------------------
+    # Only a heuristic: we look at source_text if present
+    if extr.source_text:
+        st = extr.source_text
+        has_pct = "%" in st
+        has_eur = ("EUR" in st) or ("€" in st)
 
-    # 3) Scale resolution
-    scale_inferred, scale_src = infer_scale(context_scale_tokens)
-    scale_final = extr.scale or scale_inferred or typical_scale or 1.0
+        if has_pct and extr.unit != "%":
+            notes.append("unit_mismatch_snippet_percent")
+        if has_eur and extr.unit == "%":
+            notes.append("unit_mismatch_snippet_eur")
 
-    # 4) Canonicalize
-    value_canon = apply_scale(p.value, scale_final)
+    # --- Scale resolution ----------------------------------------------------
+    hit = infer_scale(
+        source_text=extr.source_text,
+        page_text=page_text_for_scale,
+        typical_scale=typical_scale,
+    )
 
-    # 5) Confidence
-    conf = 0.35  # base if parse ok
-    if scale_inferred:
-        conf += 0.2
-    if extr.scale and extr.scale == scale_inferred:
-        conf += 0.1
+    # Prefer model-provided scale only if allowed; otherwise ignore it
+    model_scale = extr.scale if extr.scale in ALLOWED_SCALES else None
+
+    scale_final: float | None = None
+    scale_source: ScaleSource | None = None
+
+    # 1) model scale wins (if allowed)
+    if model_scale is not None:
+        scale_final = float(model_scale)
+        scale_source = extr.scale_source  # may be None, that's okay
+
+    # 2) otherwise use inferred scale
+    if scale_final is None and hit.scale is not None:
+        scale_final = float(hit.scale)
+        scale_source = hit.source
+
+    # 3) EUR amounts: missing scale => assume 1.0, record as default
+    if scale_final is None and extr.unit == "EUR":
+        scale_final = 1.0
+        scale_source = scale_source or "default"
+
+    # --- Canonical value from LLM value_unscaled ----------------------------
+    value_canon: float | None = None
+
+    if extr.value_unscaled is not None:
+        if extr.unit == "%":
+            # For percent, scale is irrelevant: canonical == unscaled
+            value_canon = float(extr.value_unscaled)
+        else:
+            # For EUR (and other numeric amounts), apply scale if known
+            value_canon = (
+                float(extr.value_unscaled) * float(scale_final)
+                if scale_final is not None
+                else None
+            )
+
+    if value_canon is not None:
+        value_canon = round(value_canon, 2)
+
+    # --- Determine unit -----------------------------------------------------
+    unit = extr.unit if value_canon is not None else None
+
+    # --- Value consistency check against snippet (non-destructive) ----------
+    # This should NOT pick a different value; only checks consistency.
+    if extr.source_text:
+        pair = extract_current_prev_pair(
+            extr.source_text
+        )  # returns (curr, prev) or None
+        candidates = []
+        if pair:
+            curr, prev = pair
+            candidates.extend([curr, prev])
+        candidates.extend(extract_numbers_de(extr.source_text))  # list[float]
+
+        # Check if model value is among candidates (tolerance helps decimals)
+        ok_match = any(
+            abs(float(extr.value_unscaled) - c) <= 1e-6 * max(1.0, abs(c))
+            for c in candidates
+        )
+
+        if not ok_match:
+            # Not fatal (LLM might have normalized formatting), but should reduce confidence
+            notes.append("value_not_found_in_source_text")
+
+        # If we detect X(Y) and model picked Y (prev) instead of X, flag it
+        if pair and abs(float(extr.value_unscaled) - pair[1]) <= 1e-6 * max(
+            1.0, abs(pair[1])
+        ):
+            notes.append("looks_like_prev_year_value")
+
+    # --- Confidence ---------------------------------------------------------
+    # Start low; add points for strong evidence.
+    conf = 0.25
+
+    # snippet present is good
+    if extr.source_text:
+        conf += 0.15
+
+    # evidence page present is good
     if extr.evidence:
-        conf += 0.1
-    conf = min(1.0, conf)
+        conf += 0.10
 
-    # 6) Optional ratio check (caller supplies)
-    notes = []
+    # scale quality
+    if scale_source in ("row",):
+        conf += 0.30
+    elif scale_source in ("nearby",):
+        conf += 0.20
+    elif scale_source in ("caption",):
+        conf += 0.15
+    elif scale_source in ("default",):
+        conf += 0.05
+
+    # penalize issues
+    if any(n.startswith("unit_mismatch") for n in notes):
+        conf -= 0.25
+    if "value_not_found_in_source_text" in notes:
+        conf -= 0.35
+    if "looks_like_prev_year_value" in notes:
+        conf -= 0.25
+
+    conf = round(conf, 2)
+    conf = max(0.0, min(1.0, conf))
+
+    # Optional ratio check for percent fields
     if ratio_check and extr.unit == "%":
         expected, tol = ratio_check
-        if abs(value_canon - expected) <= tol:
+        if value_canon is not None and abs(value_canon - expected) <= tol:
             conf = min(1.0, conf + 0.15)
         else:
             notes.append(f"ratio_mismatch expected={expected} got={value_canon}")
 
+    # Decide verified: in your system "verified" really means "passed basic checks"
+    blocking = any(
+        n.startswith(block_text)
+        for block_text in (
+            "value_not_found_in_source_text",
+            "looks_like_prev_year_value",
+            "unit_mismatch",
+        )
+        for n in notes
+    )
+    verified = conf >= 0.50 and not blocking and extr.unit is not None
+
+    if extr.unit == "%":
+        scale_final = None
+        scale_source = None
+
     return VerifiedExtraction(
         **{
             **base.model_dump(),
-            "verified": True,
+            "verified": verified,
             "value_canonical": value_canon,
+            "unit": unit,
             "confidence": conf,
-            "scale_applied": float(scale_final),
-            "scale_source": scale_src
-            if scale_inferred
-            else ("provided" if extr.scale else "typical"),
+            "scale_applied": float(scale_final) if scale_final is not None else None,
+            "scale_source": scale_source,
             "verifier_notes": ";".join(notes) if notes else None,
         }
     )

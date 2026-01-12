@@ -8,6 +8,16 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 Status = Literal["ok", "not_found"]
 
 
+ScaleSource = Literal[
+    "row",
+    "column",
+    "caption",
+    "nearby",
+    "model_guess",
+    "default",
+]
+
+
 class Evidence(BaseModel):
     model_config = ConfigDict(extra="forbid")
     page: int = Field(..., ge=1)
@@ -33,9 +43,7 @@ class ExtractionLLM(BaseModel):
     scale: Optional[float] = Field(default=None, description="1|1e3|1e6|…")
     evidence: List[Evidence] = Field(default_factory=list)
     source_text: Optional[str] = Field(default=None, max_length=200)
-    scale_source: Optional[
-        Literal["row", "column", "caption", "nearby", "model_guess"]
-    ] = None
+    scale_source: Optional[ScaleSource] = None
     notes: Optional[str] = None
 
     @field_validator("source_text")

@@ -308,16 +308,23 @@ def extract_for_document(
         llm_out = extractor.extract(f, section_text, start, end)
         print(llm_out.value_unscaled)  # TODO delete
         print(llm_out.scale)  # TODO delete
-        # context scale tokens (caption > column > nearby)
-        tokens = harvest_scale_tokens(page_texts)
-        # deterministic verification
+
+        # choose a page text to use for scale inference:
+        # use first evidence page if present, otherwise the first page of the span
+        ev_page = llm_out.evidence[0].page if llm_out.evidence else start
+        ev_idx0 = ev_page - start  # 0-based within page_texts for the full span
+        page_text_for_scale = (
+            page_texts[ev_idx0] if 0 <= ev_idx0 < len(page_texts) else None
+        )
+
         ver = verify_extraction(
             doc_id=doc_id,
             extr=llm_out,
             typical_scale=f.typical_scale,
-            context_scale_tokens=tokens,
-            ratio_check=None,  # you can wire SII ratio check at the caller once you have related fields
+            page_text_for_scale=page_text_for_scale,  # NEW
+            ratio_check=None,
         )
+
         results.append(ver)
 
     return results
