@@ -134,7 +134,7 @@ def summarize_section(
     prompt = _section_prompt(section).replace("{chunk}", text)
 
     # keep output short to save money
-    resp = llm.generate_raw(prompt, options={"max_output_tokens": 350})
+    resp = llm.generate_raw(prompt, options={"max_output_tokens": 700})
     resp = (resp or "").strip()
 
     # If OpenAI and truncated -> fallback to chunking

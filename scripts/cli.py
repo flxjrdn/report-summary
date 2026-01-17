@@ -166,7 +166,7 @@ def extract_dir(
     fields: Path = typer.Option(
         Path("sfcr/extract/fields.yaml"), help="Path to fields.yaml"
     ),
-    provider: str = typer.Option("mock", help="LLM provider: ollama | mock"),
+    provider: str = typer.Option("mock", help="LLM provider: openai | ollama | mock"),
     model: str = typer.Option("", help="Model for provider (e.g., 'mistral')"),
     pattern: str = typer.Option("*.pdf", help="Glob for PDFs under src"),
     resume: bool = typer.Option(

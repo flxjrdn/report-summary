@@ -14,7 +14,7 @@ from sfcr.config import get_settings
 
 def db_path_default() -> Path:
     cfg = get_settings()
-    return Path(cfg.output_dir) / "sfcr__.sqlite"
+    return Path(cfg.output_dir) / "sfcr.sqlite"
 
 
 def connect(db_path: Optional[Path] = None) -> sqlite3.Connection:

@@ -22,9 +22,3 @@
   unit: EUR
   typical_scale: 1000
   keywords: ["Versicherungstechnische Rückstellungen", "Technical provisions", "S.17.01"]
-
-- id: risk_margin
-  subsection_hint: D.2
-  unit: EUR
-  typical_scale: 1000
-  keywords: ["Risikomarge"]

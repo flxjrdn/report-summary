@@ -23,13 +23,13 @@ class PredRow:
     value_canonical: Optional[float]
     verified: bool
     status: str
-    notes: Optional[str]
 
 
 def load_gold(csv_path: Path) -> Dict[Tuple[str, str], GoldRow]:
     gold: Dict[Tuple[str, str], GoldRow] = {}
+    print(f"Reading {csv_path}")
     with csv_path.open("r", encoding="utf-8") as f:
-        r = csv.DictReader(f)
+        r = csv.DictReader(f, delimiter=";")
         for row in r:
             if not row.get("doc_id"):
                 continue
@@ -63,7 +63,6 @@ def load_preds(jsonl_dir: Path) -> Dict[Tuple[str, str], PredRow]:
                     value_canonical=j.get("value_canonical"),
                     verified=bool(j.get("verified", False)),
                     status=j.get("status", "ok"),
-                    notes=j.get("verifier_notes"),
                 )
     return preds
 
@@ -132,7 +131,7 @@ def evaluate(
                 n_correct_verified += 1
             else:
                 errors.append(
-                    f"WRONG {g.doc_id}/{g.field_id} pred={p.value_canonical} {p.unit} gold={g.value} {g.unit} notes={p.notes}"
+                    f"WRONG {g.doc_id}/{g.field_id} pred={p.value_canonical} {p.unit} gold={g.value} {g.unit}"
                 )
         else:
             if ok:
