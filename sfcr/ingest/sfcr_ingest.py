@@ -62,13 +62,21 @@ LEFT_SUBSECTION_FULL_RE = re.compile(
     r"^(?P<section>[A-E])\.(?P<n1>\d{1,2})(?:\.(?P<n2>\d{1,2}))?$", re.I
 )
 LEFT_SUBSECTION_RE = re.compile(r"^([A-E])\.\d", re.I)  # e.g., "A.1", "B.12"
-LEADER_CHARS = (
-    r"\.\u2026\u00B7\u2219\u22EF\u2024\u2027\uf020·•⋯∙"  # dot leader variants
-)
 LEFT_LETTER_ONLY_RE = re.compile(r"^([A-E])$", re.I)  # "A"
 LEFT_TEIL_RE = re.compile(
     r"^(?:Teil|Abschnitt)\s*([A-E])\.?$", re.I
 )  # "Teil A", "Abschnitt B."
+
+
+_SINGLE_SPAN_TOC_RE = re.compile(
+    rf"""^\s*
+    (?P<letter>[A-E])\.\s*
+    (?P<title>.*?)
+    [\s{LEADER_CHARS}]*      # dot leaders/spaces
+    (?P<page>\d{{1,4}})\s*$
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
 
 HEADER_FOOTER_FREQ_THRESHOLD = 0.6  # if a line appears on >60% pages at very top/bottom -> treat as running header/footer
 
@@ -284,6 +292,23 @@ class ToCDetector:
                     break
 
         if letter_idx is None or letter_val is None:
+            # Fallback: some PDFs merge the whole ToC entry into a single span:
+            # "A. Geschäftstätigkeit ... 7"
+            if len(line_spans) == 1:
+                t = line_spans[0]["text"]
+                # reject subsection-like entries such as "A.1 ..."
+                if LEFT_SUBSECTION_RE.match(t):
+                    return None
+                m = _SINGLE_SPAN_TOC_RE.match(t)
+                if m:
+                    letter_val = m.group("letter").upper()
+                    title = re.sub(r"\s+", " ", m.group("title").strip())
+                    try:
+                        page_num = int(m.group("page"))
+                    except ValueError:
+                        return None
+                    if title:
+                        return (letter_val, title, page_num)
             return None
 
         # 2) Identify page token:
@@ -802,3 +827,11 @@ class SFCRIngestor:
             coverage_ratio=coverage_ratio,
             issues=issues,
         )
+
+
+if __name__ == "__main__":
+    ingestor = SFCRIngestor(
+        doc_id="axakv_2023",
+        pdf_path="/Users/felixjordan/Documents/code/report-summary/data/sfcrs/axakv_2023.pdf",
+    )
+    ingestor.run()

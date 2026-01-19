@@ -54,7 +54,7 @@ test:
 
 # ---  Pipeline  ----------------------------------------------------
 ingest:
-	$(PYTHON) scripts/cli.py ingest
+	$(PYTHON) scripts/cli.py ingest --doc-id $(DOC-ID)
 
 ingest-dir:
 	$(PYTHON) scripts/cli.py ingest-dir

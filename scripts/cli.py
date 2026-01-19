@@ -34,7 +34,9 @@ def _sha256(p: Path) -> str:
 
 @app.command()
 def ingest(
-    doc_id: str,
+    doc_id: str = typer.Option(
+        "", help="Document ID referring to a pdf file to be ingested"
+    ),
     outdir: Path = typer.Option(
         None, "--outdir", help="Output dir; defaults to SFCR_OUTPUT or repo default"
     ),
