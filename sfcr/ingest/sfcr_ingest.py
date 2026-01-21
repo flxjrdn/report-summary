@@ -11,11 +11,15 @@ Author: you
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import fitz  # PyMuPDF
+
+from sfcr.ingest import schema
 
 # -----------------------------
 # Utilities & configuration
@@ -56,12 +60,15 @@ RIGHT_TOKEN_RE = re.compile(
     re.VERBOSE,
 )
 LEFT_TOPLEVEL_RE = re.compile(r"^([A-E])\.$", re.I)  # e.g., "A."
+LEFT_TOPLEVEL_WITH_TITLE_RE = re.compile(r"^([A-E])\.\s+(.+)$", re.I)
+LEFT_TOPLEVEL_PREFIX_RE = re.compile(r"^([A-E])\.\s*(.*)$", re.I)
 
 # Matches "A.1" or "A.12" or "B.2.1" (optionally without trailing title)
 LEFT_SUBSECTION_FULL_RE = re.compile(
     r"^(?P<section>[A-E])\.(?P<n1>\d{1,2})(?:\.(?P<n2>\d{1,2}))?$", re.I
 )
 LEFT_SUBSECTION_RE = re.compile(r"^([A-E])\.\d", re.I)  # e.g., "A.1", "B.12"
+LEFT_SUBSECTION_CODE_RE = re.compile(r"^([A-E]\.\d{1,2}(?:\.\d{1,2})?)\b", re.I)
 LEFT_LETTER_ONLY_RE = re.compile(r"^([A-E])$", re.I)  # "A"
 LEFT_TEIL_RE = re.compile(
     r"^(?:Teil|Abschnitt)\s*([A-E])\.?$", re.I
@@ -71,6 +78,16 @@ LEFT_TEIL_RE = re.compile(
 _SINGLE_SPAN_TOC_RE = re.compile(
     rf"""^\s*
     (?P<letter>[A-E])\.\s*
+    (?P<title>.*?)
+    [\s{LEADER_CHARS}]*      # dot leaders/spaces
+    (?P<page>\d{{1,4}})\s*$
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+_SINGLE_SPAN_TOC_ITEM_RE = re.compile(
+    rf"""^\s*
+    (?P<marker>(?:[A-E]\.\d{{1,2}}(?:\.\d{{1,2}})?|[A-E])\.?)   # A.1 / A.1.2 / A / A.
+    \s+
     (?P<title>.*?)
     [\s{LEADER_CHARS}]*      # dot leaders/spaces
     (?P<page>\d{{1,4}})\s*$
@@ -163,10 +180,6 @@ class PDFLoader:
     def get_page(self, i: int) -> fitz.Page:
         return self.doc[i]
 
-    def text_blocks(self, page_index: int) -> List[Dict[str, Any]]:
-        page = self.get_page(page_index)
-        return page.get_text("dict")["blocks"]
-
     def rect(self, page_index: int) -> fitz.Rect:
         return self.get_page(page_index).rect
 
@@ -241,23 +254,52 @@ class ToCDetector:
     def _extract_line_triplet(
         self, line_spans: List[Dict[str, Any]], page_width: float
     ) -> Optional[Tuple[str, str, int]]:
-        """
-        Return (section_letter, title, page) for one baseline line.
-        Supports:
-          - 2 spans: ["A.", "Risikoprofil……39"]
-          - multi spans: ["A", ".", "Risikoprofil", "……", "39"]
-          - "Teil A" / "Abschnitt B" as left markers
-          - merged rightmost token with trailing page number
-        Skips subsections like "A.1".
-        """
         if not line_spans:
             return None
 
-        # 1) Identify left marker (A..E), accepting several forms; reject subsections
+        # --- FAST PATH: single token contains marker + title + leaders + page --------
+        # Handles cases like:
+        #   "A. Geschäftstätigkeit ... 7"
+        # where everything is merged into one span.
+        for sp in line_spans:
+            t = sp["text"]
+
+            # If it's actually a subsection line (A.1 ...), this is NOT a top-level section entry
+            if LEFT_SUBSECTION_RE.match(t):
+                return None
+
+            m = LEFT_TOPLEVEL_PREFIX_RE.match(t)
+            if not m:
+                continue
+
+            letter_val = m.group(1).upper()
+            rest = m.group(2).strip()
+            if not rest:
+                continue
+
+            # Try to parse trailing page from the remainder
+            mright = RIGHT_TOKEN_RE.match(rest)
+            if not mright:
+                continue
+
+            title = mright.group("title").strip()
+            if not title:
+                continue
+
+            try:
+                page_num = int(mright.group("page"))
+            except ValueError:
+                continue
+
+            title = re.sub(r"\s+", " ", title)
+            return (letter_val, title, page_num)
+
         letter_idx = None
         letter_val = None
+        title_prefix = ""  # title text that may live in the same span as "A."
 
-        # try strict "A." first
+        # 1) Identify left marker (A..E), accepting several forms; reject subsections
+        # a) strict "A." token
         for i, sp in enumerate(line_spans):
             t = sp["text"]
             m = LEFT_TOPLEVEL_RE.match(t)
@@ -268,7 +310,21 @@ class ToCDetector:
             if LEFT_SUBSECTION_RE.match(t):  # ignore "A.1" lines for top-level
                 return None
 
-        # try "Teil A" / "Abschnitt B"
+        # b) merged "A. <Title...>" in a single span (page is elsewhere)
+        if letter_idx is None:
+            for i, sp in enumerate(line_spans):
+                t = sp["text"]
+                if LEFT_SUBSECTION_RE.match(t):
+                    return None
+
+                m = LEFT_TOPLEVEL_WITH_TITLE_RE.match(t)
+                if m:
+                    letter_val = m.group(1).upper()
+                    letter_idx = i
+                    title_prefix = m.group(2).strip()
+                    break
+
+        # c) "Teil A" / "Abschnitt B"
         if letter_idx is None:
             for i, sp in enumerate(line_spans):
                 t = sp["text"]
@@ -278,14 +334,14 @@ class ToCDetector:
                     letter_val = m.group(1).upper()
                     break
 
-        # try "A" optionally followed by "." in next token
+        # d) "A" optionally followed by "." in next token
         if letter_idx is None:
             for i in range(len(line_spans)):
                 t = line_spans[i]["text"]
                 m = LEFT_LETTER_ONLY_RE.match(t)
                 if m:
                     if i + 1 < len(line_spans) and line_spans[i + 1]["text"] == ".":
-                        letter_idx = i + 1  # treat the '.' as the last marker token
+                        letter_idx = i + 1
                     else:
                         letter_idx = i
                     letter_val = m.group(1).upper()
@@ -336,8 +392,11 @@ class ToCDetector:
         if letter_idx >= page_idx:
             return None
 
-        # 3) Build title from tokens between (letter_idx) and (page_idx)
+        # 3) Build title from tokens between marker and page
         title_tokens: List[str] = []
+        if title_prefix:
+            title_tokens.append(title_prefix)
+
         for j in range(letter_idx + 1, page_idx):
             txt = line_spans[j]["text"]
             if _is_leader_token(txt):
@@ -365,7 +424,6 @@ class ToCDetector:
             try:
                 page_num = int(line_spans[page_idx]["text"])
             except ValueError:
-                # last resort: also try merged parsing on that token
                 m = RIGHT_TOKEN_RE.match(line_spans[page_idx]["text"])
                 if not m:
                     return None
@@ -387,6 +445,25 @@ class ToCDetector:
         """
         if not line_spans:
             return None
+
+        if len(line_spans) == 1:
+            t = line_spans[0]["text"]
+            m = _SINGLE_SPAN_TOC_ITEM_RE.match(t)
+            if m:
+                marker = m.group("marker").strip()
+                title = re.sub(r"\s+", " ", m.group("title").strip())
+                try:
+                    page_num = int(m.group("page"))
+                except ValueError:
+                    return None
+
+                # Normalize marker: ensure "A." stays "A.", and subsections like "A.1" stay "A.1"
+                # Strip trailing '.' only for subsection codes if you want, but keep section "A." intact.
+                marker_up = marker.upper()
+                if re.match(r"^[A-E]\.\d", marker_up):  # subsection marker
+                    marker_up = marker_up.rstrip(".")
+
+                return TocItem(page=page_num, title=title, left_marker=marker_up)
 
         # Try to find a rightmost page number
         page_idx = None
@@ -428,25 +505,35 @@ class ToCDetector:
         # Left marker (if any)
         left_marker = ""
         letter_idx = None
+        title_prefix = ""  # remainder of marker-span that belongs to title
+
         for i, sp in enumerate(line_spans[:page_idx]):
             t = sp["text"]
-            if LEFT_SUBSECTION_RE.match(t):
-                left_marker = t  # e.g., "E.1"
+
+            # --- subsection marker like "A.1" but sometimes merged like "A.1 G"
+            msub = LEFT_SUBSECTION_CODE_RE.match(t)
+            if msub:
+                left_marker = msub.group(1).upper()  # e.g. "A.1"
                 letter_idx = i
+                # whatever comes after "A.1" in the same span is actually title text (e.g. "G")
+                title_prefix = t[msub.end() :].strip()
                 break
+
+            # existing top-level / Teil / letter-only logic unchanged:
             m = LEFT_TOPLEVEL_RE.match(t)
             if m:
                 left_marker = m.group(1).upper() + "."
                 letter_idx = i
                 break
+
             m2 = LEFT_TEIL_RE.match(t)
             if m2:
                 left_marker = f"Teil {m2.group(1).upper()}"
                 letter_idx = i
                 break
+
             m3 = LEFT_LETTER_ONLY_RE.match(t)
             if m3:
-                # If next token is ".", treat "A" + "." as "A."
                 if i + 1 < page_idx and line_spans[i + 1]["text"] == ".":
                     left_marker = m3.group(1).upper() + "."
                     letter_idx = i + 1
@@ -458,6 +545,10 @@ class ToCDetector:
         # Build title from tokens between left marker and page
         start_j = (letter_idx + 1) if letter_idx is not None else 0
         title_tokens = []
+
+        if title_prefix:
+            title_tokens.append(title_prefix)
+
         for j in range(start_j, page_idx):
             txt = line_spans[j]["text"]
             if txt and all(ch in LEADER_CHARS + " " for ch in txt):
@@ -830,8 +921,38 @@ class SFCRIngestor:
 
 
 if __name__ == "__main__":
-    ingestor = SFCRIngestor(
-        doc_id="axakv_2023",
-        pdf_path="/Users/felixjordan/Documents/code/report-summary/data/sfcrs/axakv_2023.pdf",
+    doc_id = "axakv_2023"
+    pdf_path = (
+        "/Users/felixjordan/Documents/code/report-summary/data/sfcrs/axakv_2023.pdf"
     )
-    ingestor.run()
+    ingestor = SFCRIngestor(
+        doc_id=doc_id,
+        pdf_path=pdf_path,
+    )
+    res = ingestor.run()
+    payload = {
+        "doc_id": doc_id,
+        "page_count": ingestor.loader.page_count(),
+        "sections": [s.__dict__ for s in res.sections],
+        "subsections": [s.__dict__ for s in res.subsections],
+        "coverage_ratio": res.coverage_ratio,
+        "issues": res.issues,
+    }
+    # Validate against frozen contract & dump deterministically
+    ir = schema.IngestionResult(**payload)
+    payload_dict = ir.model_dump(exclude_none=True)
+    json_text = json.dumps(
+        payload_dict,
+        indent=2,
+        sort_keys=True,
+        ensure_ascii=False,
+    )
+    out_path = (
+        Path("/Users/felixjordan/Documents/code/report-summary/artifacts/ingest")
+        / f"{doc_id}.ingest.json"
+    )
+    out_path.write_text(
+        json_text,
+        encoding="utf-8",
+    )
+    print(f"[green]✓[/green] {doc_id} → {out_path}")
